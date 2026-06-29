@@ -7,6 +7,8 @@ __pycache__/
 /data/
 
 # Models
-/models/
 *.pt
 *.h5
+
+# Embeddings
+/embeddings/
