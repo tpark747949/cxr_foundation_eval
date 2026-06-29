@@ -6,7 +6,6 @@ from tensorflow.image import resize as tf_resize
 import tensorflow as tf
 import numpy as np
 
-tf.config.set_visible_devices([], 'GPU')
 
 img = Image.open("../../data/sample1.jpg")
 print(img.height, img.width)
