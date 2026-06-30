@@ -54,7 +54,7 @@ def png_to_tfexample(image_array: np.ndarray) -> tf.train.Example:
 
     return example
 
-img = Image.open("../../data/sample2.png").convert("L")  # Convert to greyscale
+img = Image.open("../../data/samples/sample2.png").convert("L")  # Convert to greyscale
 
 # Step 1 - ELIXR C (image to elixr C embeddings)
 serialized_img_tf_example = png_to_tfexample(np.array(img)).SerializeToString()

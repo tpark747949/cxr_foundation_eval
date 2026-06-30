@@ -7,7 +7,7 @@ import tensorflow as tf
 import numpy as np
 
 
-img = Image.open("../../data/sample1.jpg")
+img = Image.open("../../data/samples/sample1.jpg")
 print(img.height, img.width)
 
 INPUT_DIMENSION = [448, 448]

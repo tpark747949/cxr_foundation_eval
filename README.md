@@ -1,0 +1,305 @@
+<h1>Research Plan: Evaluating Chest X-ray Foundation Models on MIMIC-CXR-JPG</h1>
+<nav class="tabs" aria-label="Section navigation">
+  <a href="#background">1. Background</a>
+  <a href="#aims">2. Aims</a>
+  <a href="#dataset">3. Dataset</a>
+  <a href="#models">4. Models</a>
+  <a href="#papers">5. Papers</a>
+  <a href="#design">6. Experiments</a>
+  <a href="#analysis">7. Analysis</a>
+</nav>
+
+<p><strong>Proposed study focus:</strong> Evaluate whether chest X-ray-specific foundation models and general medical vision-language foundation models provide useful representations for disease classification, zero-shot prediction, and image-report alignment on MIMIC-CXR-JPG.</p>
+
+<div class="box">
+  <strong>Core idea:</strong> Instead of training a large model from scratch, use pretrained foundation models to extract image/text embeddings from MIMIC-CXR-JPG, then evaluate them under the same downstream tasks and metrics.
+</div>
+
+<h2 id="background">1. Background and Motivation</h2>
+
+<p>The previous research direction based on subject-level merging produced too few usable samples. MIMIC-CXR-JPG provides a much larger and more suitable dataset for a chest X-ray AI study because it includes chest radiographs and associated radiology reports.</p>
+
+<p>The main research question is:</p>
+
+<div class="box">
+  <strong>Do CXR-specific foundation models outperform general medical vision-language foundation models on MIMIC-CXR, and under what conditions?</strong>
+</div>
+
+<p>This question is important because MIMIC-CXR-JPG is a chest X-ray dataset. Therefore, one might expect a CXR-specific model to perform better. However, newer general medical vision-language models such as MedSigLIP may be stronger for text-based tasks such as zero-shot classification and image-report retrieval.</p>
+
+<h2 id="aims">2. Main Research Aims</h2>
+
+<table>
+  <tr>
+    <th>Aim</th>
+    <th>Description</th>
+    <th>Expected Output</th>
+  </tr>
+  <tr>
+    <td><strong>Aim 1</strong></td>
+    <td>Compare pretrained foundation model embeddings for MIMIC-CXR disease classification.</td>
+    <td>AUROC/AUPRC/F1 for 14 CheXpert-style labels.</td>
+  </tr>
+  <tr>
+    <td><strong>Aim 2</strong></td>
+    <td>Evaluate label efficiency using 1%, 5%, 10%, and 100% of training labels.</td>
+    <td>Performance curves showing which model works best with limited labels.</td>
+  </tr>
+  <tr>
+    <td><strong>Aim 3</strong></td>
+    <td>Evaluate zero-shot classification for models with text encoders.</td>
+    <td>Zero-shot performance using disease prompts such as “pneumothorax present”.</td>
+  </tr>
+  <tr>
+    <td><strong>Aim 4</strong></td>
+    <td>Evaluate image-report alignment using MIMIC-CXR reports.</td>
+    <td>Image-to-report and report-to-image retrieval metrics.</td>
+  </tr>
+</table>
+
+<h2 id="dataset">3. Primary Dataset</h2>
+
+<h3>3.1 MIMIC-CXR-JPG</h3>
+
+<p><strong>Official link:</strong> <a href="https://physionet.org/content/mimic-cxr-jpg/2.1.0/" target="_blank">MIMIC-CXR-JPG v2.1.0 - PhysioNet</a></p>
+
+<p>MIMIC-CXR-JPG is the recommended starting point for this project because it provides JPG images and structured labels derived from radiology reports. This makes it easier to run image classification experiments without directly processing DICOM files.</p>
+
+<h3>3.2 Labels</h3>
+
+<p>Use the structured labels provided with MIMIC-CXR-JPG. The main labels are based on common chest X-ray findings, including:</p>
+
+<ul>
+  <li>Atelectasis</li>
+  <li>Cardiomegaly</li>
+  <li>Consolidation</li>
+  <li>Edema</li>
+  <li>Enlarged cardiomediastinum</li>
+  <li>Fracture</li>
+  <li>Lung lesion</li>
+  <li>Lung opacity</li>
+  <li>No finding</li>
+  <li>Pleural effusion</li>
+  <li>Pleural other</li>
+  <li>Pneumonia</li>
+  <li>Pneumothorax</li>
+  <li>Support devices</li>
+</ul>
+
+<div class="warning">
+  <strong>Important:</strong> MIMIC-CXR-JPG is a credentialed dataset. Do not upload images or reports to third-party online APIs unless explicitly allowed by the PhysioNet data use agreement.
+</div>
+
+<h2 id="models">4. Candidate Foundation Models</h2>
+
+<table>
+  <tr>
+    <th>Model</th>
+    <th>Type</th>
+    <th>Why Include It?</th>
+    <th>Link</th>
+  </tr>
+  <tr>
+    <td><strong>MedSigLIP</strong></td>
+    <td>General medical vision-language model</td>
+    <td>Newer Google model trained on medical image-text pairs. Useful for image embeddings, text embeddings, zero-shot classification, and retrieval.</td>
+    <td><a href="https://developers.google.com/health-ai-developer-foundations/medsiglip" target="_blank">Google MedSigLIP</a><br><a href="https://github.com/Google-Health/medsiglip" target="_blank">GitHub</a></td>
+  </tr>
+  <tr>
+    <td><strong>CXR Foundation</strong></td>
+    <td>CXR-specific embedding model</td>
+    <td>Strong CXR-specific baseline. Google now labels it as legacy and recommends MedSigLIP for new development, but it remains useful as a comparison model.</td>
+    <td><a href="https://developers.google.com/health-ai-developer-foundations/cxr-foundation" target="_blank">Google CXR Foundation</a><br><a href="https://github.com/Google-Health/cxr-foundation" target="_blank">GitHub</a></td>
+  </tr>
+  <tr>
+    <td><strong>BioViL / BioViL-T</strong></td>
+    <td>CXR vision-language model</td>
+    <td>Designed for chest X-ray image-report representation learning. Useful for zero-shot classification and image-text retrieval.</td>
+    <td><a href="https://arxiv.org/abs/2204.09817" target="_blank">BioViL paper</a><br><a href="https://huggingface.co/microsoft/BiomedVLP-BioViL-T" target="_blank">BioViL-T Hugging Face</a></td>
+  </tr>
+  <tr>
+    <td><strong>EVA-X</strong></td>
+    <td>CXR self-supervised foundation model</td>
+    <td>Learns visual representations from X-ray images. Useful for classification and label-efficiency experiments.</td>
+    <td><a href="https://arxiv.org/abs/2405.05237" target="_blank">EVA-X paper</a><br><a href="https://github.com/hustvl/EVA-X" target="_blank">GitHub</a></td>
+  </tr>
+  <tr>
+    <td><strong>CheXFound</strong></td>
+    <td>CXR self-supervised foundation model</td>
+    <td>Uses global and local representations. Useful for multi-label classification and rare/local finding analysis.</td>
+    <td><a href="https://arxiv.org/abs/2502.05142" target="_blank">CheXFound paper</a><br><a href="https://github.com/RPIDIAL/CheXFound" target="_blank">GitHub</a></td>
+  </tr>
+  <tr>
+    <td><strong>CheXagent</strong></td>
+    <td>CXR instruction-tuned vision-language model</td>
+    <td>Useful for later-stage analysis such as question answering or report generation, but not necessary for the first classification benchmark.</td>
+    <td><a href="https://arxiv.org/abs/2401.12208" target="_blank">CheXagent paper</a><br><a href="https://stanford-aimi.github.io/chexagent.html" target="_blank">Project page</a><br><a href="https://github.com/Stanford-AIMI/CheXagent" target="_blank">GitHub</a></td>
+  </tr>
+</table>
+
+<h2 id="papers">5. Key Related Papers</h2>
+
+<table>
+  <tr>
+    <th>Topic</th>
+    <th>Paper / Resource</th>
+    <th>Why It Matters</th>
+  </tr>
+  <tr>
+    <td>MIMIC-CXR dataset</td>
+    <td><a href="https://arxiv.org/abs/1901.07042" target="_blank">MIMIC-CXR: A large publicly available database of labeled chest radiographs</a></td>
+    <td>Original dataset paper.</td>
+  </tr>
+  <tr>
+    <td>Google Health AI foundations</td>
+    <td><a href="https://arxiv.org/abs/2411.15128" target="_blank">Health AI Developer Foundations</a></td>
+    <td>Technical report describing Google foundation models including MedSigLIP and related tools.</td>
+  </tr>
+  <tr>
+    <td>CXR Foundation</td>
+    <td><a href="https://developers.google.com/health-ai-developer-foundations/cxr-foundation" target="_blank">Google CXR Foundation documentation</a></td>
+    <td>Official documentation; notes that CXR Foundation is legacy and MedSigLIP is recommended for new development.</td>
+  </tr>
+  <tr>
+    <td>MedSigLIP</td>
+    <td><a href="https://developers.google.com/health-ai-developer-foundations/medsiglip" target="_blank">Google MedSigLIP documentation</a></td>
+    <td>Main model for new development; supports image and text embeddings.</td>
+  </tr>
+  <tr>
+    <td>BioViL-T</td>
+    <td><a href="https://arxiv.org/abs/2301.04558" target="_blank">Learning to Exploit Temporal Structure for Biomedical Vision-Language Processing</a></td>
+    <td>Important CXR vision-language baseline using temporal information.</td>
+  </tr>
+  <tr>
+    <td>CheXagent</td>
+    <td><a href="https://arxiv.org/abs/2401.12208" target="_blank">CheXagent: Towards a Foundation Model for Chest X-Ray Interpretation</a></td>
+    <td>Instruction-tuned CXR model for interpretation and summarization.</td>
+  </tr>
+  <tr>
+    <td>EVA-X</td>
+    <td><a href="https://arxiv.org/abs/2405.05237" target="_blank">EVA-X: A Foundation Model for General Chest X-ray Analysis with Self-supervised Learning</a></td>
+    <td>Self-supervised CXR representation model.</td>
+  </tr>
+  <tr>
+    <td>CheXFound</td>
+    <td><a href="https://arxiv.org/abs/2502.05142" target="_blank">Chest X-ray Foundation Model with Global and Local Representations Integration</a></td>
+    <td>Global-local CXR foundation model; relevant for multi-label and rare/local findings.</td>
+  </tr>
+  <tr>
+    <td>Recent efficient CXR foundation model</td>
+    <td><a href="https://arxiv.org/abs/2602.22843" target="_blank">A data- and compute-efficient chest X-ray foundation model beyond aggressive scaling</a></td>
+    <td>Useful reference for discussing efficient pretraining and long-tail/rare conditions.</td>
+  </tr>
+</table>
+
+<h2 id="design">6. Proposed Experimental Design</h2>
+
+<h3>Experiment 1: Supervised Disease Classification</h3>
+
+<p><strong>Goal:</strong> Compare whether embeddings from each foundation model can predict MIMIC-CXR disease labels.</p>
+
+<ol>
+  <li>Use MIMIC-CXR-JPG images and structured labels.</li>
+  <li>Use the official train/validation/test split if available.</li>
+  <li>For each model, extract one embedding vector per image.</li>
+  <li>Train the same lightweight classifier on top of each embedding set.</li>
+  <li>Use logistic regression as the main classifier; optionally add LightGBM or a small MLP as sensitivity analysis.</li>
+  <li>Evaluate performance on the test set.</li>
+</ol>
+
+<p><strong>Main metrics:</strong> AUROC, AUPRC, macro-F1, per-label F1.</p>
+
+<h3>Experiment 2: Label-Efficiency Analysis</h3>
+
+<p><strong>Goal:</strong> Test which foundation model works best when labeled data are limited.</p>
+
+<ol>
+  <li>Use 1%, 5%, 10%, and 100% of the training set labels.</li>
+  <li>Keep the validation and test sets fixed.</li>
+  <li>Train the same classifier under each label percentage.</li>
+  <li>Compare performance curves across models.</li>
+</ol>
+
+<p><strong>Core question:</strong> Does MedSigLIP, CXR Foundation, BioViL, EVA-X, or CheXFound provide the best representation when labels are scarce?</p>
+
+<h3>Experiment 3: Zero-Shot Classification</h3>
+
+<p><strong>Goal:</strong> Test models with text encoders without training a disease classifier.</p>
+
+<p><strong>Candidate models:</strong> MedSigLIP, BioViL/BioViL-T.</p>
+
+<p>For each disease, create simple positive and negative prompts:</p>
+
+<table>
+  <tr>
+    <th>Disease</th>
+    <th>Positive Prompt</th>
+    <th>Negative Prompt</th>
+  </tr>
+  <tr>
+    <td>Pneumothorax</td>
+    <td>“pneumothorax present”</td>
+    <td>“no pneumothorax”</td>
+  </tr>
+  <tr>
+    <td>Pleural effusion</td>
+    <td>“pleural effusion present”</td>
+    <td>“no pleural effusion”</td>
+  </tr>
+  <tr>
+    <td>Cardiomegaly</td>
+    <td>“cardiomegaly present”</td>
+    <td>“normal heart size”</td>
+  </tr>
+  <tr>
+    <td>Pneumonia</td>
+    <td>“pneumonia present”</td>
+    <td>“no pneumonia”</td>
+  </tr>
+</table>
+
+<p>Compute image-text similarity and classify the image based on which prompt is closer.</p>
+
+<h3>Experiment 4: Image-Report Retrieval</h3>
+
+<p><strong>Goal:</strong> Use MIMIC-CXR reports to test image-text alignment.</p>
+
+<ol>
+  <li>Use the image and its paired report impression/findings section.</li>
+  <li>Extract image embeddings and text embeddings.</li>
+  <li>Perform image-to-report retrieval and report-to-image retrieval.</li>
+  <li>Evaluate whether the correct paired report/image appears in the top-k results.</li>
+</ol>
+
+<p><strong>Main metrics:</strong> Recall@1, Recall@5, Recall@10, mean reciprocal rank.</p>
+
+<h2 id="analysis">7. Analysis Plan</h2>
+
+<table>
+  <tr>
+    <th>Analysis</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td>Overall performance comparison</td>
+    <td>Identify the best-performing model on average.</td>
+  </tr>
+  <tr>
+    <td>Disease-specific analysis</td>
+    <td>Determine which models are better for specific findings such as pneumothorax, pleural effusion, pneumonia, or cardiomegaly.</td>
+  </tr>
+  <tr>
+    <td>Common vs rare labels</td>
+    <td>Test whether some models perform better for long-tail findings.</td>
+  </tr>
+  <tr>
+    <td>Zero-shot vs supervised comparison</td>
+    <td>Find when prompt-based prediction is useful and when supervised classifiers are necessary.</td>
+  </tr>
+  <tr>
+    <td>CXR-specific vs general medical model comparison</td>
+    <td>Answer whether CXR-specific specialization still matters compared with newer general medical VLMs.</td>
+  </tr>
+</table>
+
+<p class="small">Prepared as a research plan focused on core motivation, dataset, model candidates, key papers, and concrete experimental design.</p>
