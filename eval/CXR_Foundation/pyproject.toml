@@ -4,4 +4,12 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "huggingface-hub>=1.21.0",
+    "logging>=0.4.9.6",
+    "matplotlib>=3.11.0",
+    "numpy==1.26.4",
+    "pillow>=12.2.0",
+    "pypng>=0.20220715.0",
+    "sentencepiece>=0.2.1",
+]

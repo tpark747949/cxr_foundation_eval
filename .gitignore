@@ -9,6 +9,8 @@ __pycache__/
 # Models
 *.pt
 *.h5
+*.pb
+**/checkpoints/
 
 # Embeddings
 /embeddings/

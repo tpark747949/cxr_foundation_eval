@@ -1,0 +1,1 @@
+Extract embeddings from MIMIC-CXR-JPG with CXR-Foundation.
