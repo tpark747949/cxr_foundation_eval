@@ -54,7 +54,7 @@ def png_to_tfexample(image_array: np.ndarray) -> tf.train.Example:
 
     return example
 
-img = Image.open("../../data/samples/sample2.png").convert("L")  # Convert to greyscale
+img = Image.open("../../data/sample_images/sample2.png").convert("L")  # Convert to greyscale
 
 # Step 1 - ELIXR C (image to elixr C embeddings)
 serialized_img_tf_example = png_to_tfexample(np.array(img)).SerializeToString()
@@ -82,7 +82,7 @@ if 'qformer_model' not in locals():
 qformer_output = qformer_model.signatures['serving_default'](**qformer_input)
 elixrb_embeddings = qformer_output['all_contrastive_img_emb']
 
-print("ELIXR-B - embedding shape: ", elixrb_embeddings.shape)
+print("CXR-Foundation - embedding shape: ", elixrb_embeddings.shape)
 
 # 2. Create the figure and axes directly (bypasses the interactive GUI layer)
 fig = plt.Figure()
@@ -91,7 +91,7 @@ ax = fig.subplots()
 # 3. Plot exactly like before
 im = ax.imshow(elixrb_embeddings[0], cmap='gray')
 fig.colorbar(im, ax=ax)
-ax.set_title('Visualization of ELIXR-B embedding output')
+ax.set_title('Visualisation of CXR-Foundation embedding output')
 
 # 4. Bake it directly to disk
-fig.savefig('elixrb_embedding.png', bbox_inches='tight', dpi=300)
+fig.savefig('embedding_plot.png', bbox_inches='tight', dpi=300)
