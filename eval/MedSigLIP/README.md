@@ -1,1 +1,1 @@
-Extract embeddings from MIMIC-CXR-JPG with MedSigLIP.
+Extract image embeddings with MedSigLIP.
