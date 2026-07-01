@@ -11,6 +11,7 @@ __pycache__/
 *.h5
 *.pb
 **/checkpoints/
+/eval/EVA-X/EVA-X/
 
 # Embeddings
 /embeddings/
