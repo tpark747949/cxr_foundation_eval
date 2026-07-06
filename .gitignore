@@ -14,4 +14,4 @@ __pycache__/
 /eval/EVA-X/EVA-X/
 
 # Embeddings
-/embeddings/
+embeddings/*

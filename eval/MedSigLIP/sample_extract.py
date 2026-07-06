@@ -56,3 +56,5 @@ plt.grid(True)
 # Saves the plot as an image file in your current folder
 plt.savefig('embedding_plot.png', dpi=300, bbox_inches='tight')
 plt.close()  # Cleans up memory
+
+print(output_embeddings.type())
