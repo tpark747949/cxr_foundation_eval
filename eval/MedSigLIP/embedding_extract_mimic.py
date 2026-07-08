@@ -48,38 +48,42 @@ df_paths = pd.DataFrame({"path": paths})
 df_paths["dicom_id"] = df_paths["path"].apply(lambda x: os.path.splitext(os.path.basename(x))[0])
 
 # Read metadata CSVs
+# Read metadata CSVs
 df_meta = pd.read_csv(os.path.join(METADATA_DIR, "mimic-cxr-2.0.0-metadata.csv.gz"))
 df_split = pd.read_csv(os.path.join(METADATA_DIR, "mimic-cxr-2.0.0-split.csv.gz"))
 df_chexpert = pd.read_csv(os.path.join(METADATA_DIR, "mimic-cxr-2.0.0-chexpert.csv.gz"))
+df_negbio = pd.read_csv(os.path.join(METADATA_DIR, "mimic-cxr-2.0.0-negbio.csv.gz"))
 
-# Clean up CheXpert column names to match your schema's underscores
-df_chexpert.columns = [col.replace(" ", "_") for col in df_chexpert.columns]
+label_cols = [
+    "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Enlarged Cardiomediastinum",
+    "Fracture", "Lung Lesion", "Lung Opacity", "Pleural Effusion", "Pneumonia",
+    "Pneumothorax", "Pleural Other", "Support Devices", "No Finding"
+]
 
-# Stepwise merge to preserve all paths
-# 1. Merge metadata
+# Create renamed column mapping to avoid collisions (and replace spaces with underscores)
+chex_rename = {col: f"{col.replace(' ', '_')}_chex" for col in label_cols}
+neg_rename = {col: f"{col.replace(' ', '_')}_neg" for col in label_cols}
+
+df_chexpert = df_chexpert.rename(columns=chex_rename)
+df_negbio = df_negbio.rename(columns=neg_rename)
+
+# Stepwise merge
 df_master = df_paths.merge(df_meta, on="dicom_id", how="left")
-
-# 2. Merge ONLY the split column to avoid duplicating subject_id and study_id
 df_master = df_master.merge(df_split[["dicom_id", "split"]], on="dicom_id", how="left")
-
-# 3. Merge CheXpert labels
 df_master = df_master.merge(df_chexpert, on=["subject_id", "study_id"], how="left")
+df_master = df_master.merge(df_negbio, on=["subject_id", "study_id"], how="left")
 
-# Force numeric columns to be numbers; turn garbage data into NaNs, then fill with 0
+# Hardened coercion (Handling missing data)
 df_master["Rows"] = pd.to_numeric(df_master["Rows"], errors="coerce").fillna(0).astype(np.uint16)
 df_master["Columns"] = pd.to_numeric(df_master["Columns"], errors="coerce").fillna(0).astype(np.uint16)
 df_master["study_id"] = pd.to_numeric(df_master["study_id"], errors="coerce").fillna(0).astype(np.uint32)
 df_master["subject_id"] = pd.to_numeric(df_master["subject_id"], errors="coerce").fillna(0).astype(np.uint32)
 
-label_cols = [
-    "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Enlarged_Cardiomediastinum",
-    "Fracture", "Lung_Lesion", "Lung_Opacity", "Pleural_Effusion", "Pneumonia",
-    "Pneumothorax", "Pleural_Other", "Support_Devices", "No_Finding"
-]
-
-# Do the same for all labels
-for col in label_cols:
-    df_master[col] = pd.to_numeric(df_master[col], errors="coerce").fillna(-2).astype(np.int8)
+# Apply our -2 sentinel value to both sets of labels
+clean_label_cols = [col.replace(' ', '_') for col in label_cols]
+for col in clean_label_cols:
+    df_master[f"{col}_chex"] = pd.to_numeric(df_master[f"{col}_chex"], errors="coerce").fillna(-2).astype(np.int8)
+    df_master[f"{col}_neg"] = pd.to_numeric(df_master[f"{col}_neg"], errors="coerce").fillna(-2).astype(np.int8)
 
 print(f"Total records to process: {len(df_master)}")
 
@@ -140,7 +144,8 @@ schema = pa.schema([
     pa.field("study_id", pa.uint32()),   # Upgraded to uint32 to handle 8-digit IDs
     pa.field("subject_id", pa.uint32()), # Upgraded to uint32 to handle 8-digit IDs
     pa.field("split", pa.string()),
-    pa.field("CheXpert_labels", pa.struct([pa.field(col, pa.int8()) for col in label_cols])),
+    pa.field("CheXpert_labels", pa.struct([pa.field(col, pa.int8()) for col in clean_label_cols])),
+    pa.field("NegBio_labels", pa.struct([pa.field(col, pa.int8()) for col in clean_label_cols])),
     pa.field("embedding_raw", pa.list_(pa.float32(), 1152)),
     pa.field("embedding_l2", pa.list_(pa.float32(), 1152)),
 ])
@@ -214,7 +219,8 @@ with torch.no_grad():
                 "study_id": int(row["study_id"]),
                 "subject_id": int(row["subject_id"]),
                 "split": str(row["split"]) if pd.notna(row["split"]) else None,
-                "CheXpert_labels": {col: int(row[col]) for col in label_cols},
+                "CheXpert_labels": {col: int(row[f"{col}_chex"]) for col in clean_label_cols},
+                "NegBio_labels": {col: int(row[f"{col}_neg"]) for col in clean_label_cols},
                 # Will be a list of floats if successful, or None if the file was corrupt
                 "embedding_raw": raw_embeddings_batch[idx_in_batch],
                 "embedding_l2": l2_embeddings_batch[idx_in_batch],
