@@ -35,6 +35,8 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+logging.error("Testing connection.")
+
 # ==========================================
 # 1. LOAD AND MERGE METADATA
 # ==========================================

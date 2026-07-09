@@ -13,6 +13,7 @@ from PIL import Image
 # Suppress overly verbose TF warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import tensorflow as tf
+import tensorflow_text
 
 # ==========================================
 # 0. LOGGING & TENSORFLOW MEMORY SETUP
@@ -22,6 +23,8 @@ logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+logging.error("Testing connection.")
 
 # Prevent TensorFlow from instantly hogging all 48GB of A6000 VRAM
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -35,23 +38,23 @@ if gpus:
 # ==========================================
 # CONFIGURATION & PATHS
 # ==========================================
-DATA_DIR = "/path/to/your/symlinked/mimic_cxr_data"  # Change to your symlink target
-METADATA_DIR = "../../data/metadata"                 # Directory containing your csv.gz files
-URI = "../../embeddings/MIMIC-CXR-JPG-Foundation"
+DATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"  # Change to your symlink target
+METADATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"
+URI = "../../embeddings/MIMIC-CXR-JPG"
 BATCH_SIZE = 128                                     # Adjust based on memory consumption
 NUM_WORKERS = 8                                      # Multi-process CPU data loading
-WRITE_BUFFER_SIZE = 5000                             # LanceDB chunking
+WRITE_BUFFER_SIZE = 2500                             # LanceDB chunking
 
 # IMPORTANT: Set this to the flattened size of the CXR-Foundation output.
 # If output is [batch, 32, 128], flattened dim is 32 * 128 = 4096.
-EMBEDDING_DIM = 4096 
+EMBEDDING_DIM = 4096
 
 # ==========================================
 # 1. LOAD AND MERGE METADATA (CHEXPERT + NEGBIO)
 # ==========================================
 print("Loading and indexing metadata files...")
 
-with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES.txt"), "r") as f:
+with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES"), "r") as f:
     paths = [line.strip() for line in f if line.strip()]
 df_paths = pd.DataFrame({"path": paths})
 df_paths["dicom_id"] = df_paths["path"].apply(lambda x: os.path.splitext(os.path.basename(x))[0])
@@ -194,10 +197,14 @@ qformer_model = tf.saved_model.load("./checkpoints/hf/pax-elixr-b-text")
 qformer_infer = qformer_model.signatures['serving_default']
 
 # ==========================================
-# 5. BATCH INFERENCE & DATABASE POPULATION
+# 5. INFERENCE & DATABASE POPULATION (BATCH=1 FOR TF)
 # ==========================================
 print("Starting inference pipeline...")
 buffer_records = []
+
+# Pre-allocate the static zero tensors required by the Q-Former (Batch Size MUST be 1)
+static_ids = tf.zeros((1, 1, 128), dtype=tf.int32)
+static_paddings = tf.zeros((1, 1, 128), dtype=tf.float32)
 
 for batch_strings, indices, success_flags in dataloader:
     indices = indices.numpy()
@@ -210,34 +217,34 @@ for batch_strings, indices, success_flags in dataloader:
     
     if valid_indices:
         valid_strings = [batch_strings[i] for i in valid_indices]
-        current_batch_size = len(valid_strings)
         
-        # 1. ELIXR-C Pass
-        tf_string_batch = tf.constant(valid_strings)
-        elixrc_output = elixrc_infer(input_example=tf_string_batch)
-        elixrc_embedding = elixrc_output['feature_maps_0']
-        
-        # 2. QFormer Pass
-        qformer_input = {
-            'image_feature': elixrc_embedding,
-            'ids': tf.zeros((current_batch_size, 1, 128), dtype=tf.int32),
-            'paddings': tf.zeros((current_batch_size, 1, 128), dtype=tf.float32),
-        }
-        qformer_output = qformer_infer(**qformer_input)
-        
-        # 3. Flatten & Normalize Outputs
-        raw_outs = qformer_output['all_contrastive_img_emb']
-        # Flatten from [Batch, Num_Queries, Dim] to [Batch, Flattened_Dim]
-        raw_outs_flat = tf.reshape(raw_outs, (current_batch_size, -1))
-        l2_outs_flat = tf.math.l2_normalize(raw_outs_flat, axis=-1)
-        
-        raw_outs_np = raw_outs_flat.numpy()
-        l2_outs_np = l2_outs_flat.numpy()
-        
-        # Map back to positions
+        # Iterate through the pre-processed batch one by one for TensorFlow
         for exact_gpu_idx, original_batch_idx in enumerate(valid_indices):
-            raw_embeddings_batch[original_batch_idx] = raw_outs_np[exact_gpu_idx].tolist()
-            l2_embeddings_batch[original_batch_idx] = l2_outs_np[exact_gpu_idx].tolist()
+            single_string = valid_strings[exact_gpu_idx]
+            
+            # 1. ELIXR-C Pass (Requires a 1D tensor of shape (1,))
+            tf_string = tf.constant([single_string])
+            elixrc_output = elixrc_infer(input_example=tf_string)
+            elixrc_embedding = elixrc_output['feature_maps_0']
+            
+            # 2. QFormer Pass (Requires image_feature shape (1, 8, 8, 1376))
+            qformer_input = {
+                'image_feature': elixrc_embedding,
+                'ids': static_ids,
+                'paddings': static_paddings,
+            }
+            qformer_output = qformer_infer(**qformer_input)
+            
+            # 3. Flatten & Normalize
+            raw_out = qformer_output['all_contrastive_img_emb']  # Shape is (1, 32, 128)
+            
+            # Flatten to a 1D tensor of shape (4096,)
+            raw_out_flat = tf.reshape(raw_out, (-1,))
+            l2_out_flat = tf.math.l2_normalize(raw_out_flat, axis=-1)
+            
+            # Map back to positions
+            raw_embeddings_batch[original_batch_idx] = raw_out_flat.numpy().tolist()
+            l2_embeddings_batch[original_batch_idx] = l2_out_flat.numpy().tolist()
 
     # Build rows
     for idx_in_batch, global_idx in enumerate(indices):
