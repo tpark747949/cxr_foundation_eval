@@ -41,7 +41,7 @@ logging.basicConfig(
 print("Loading and indexing metadata files...")
 
 # Read IMAGE_FILENAMES.txt
-with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES.txt"), "r") as f:
+with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES"), "r") as f:
     paths = [line.strip() for line in f if line.strip()]
 df_paths = pd.DataFrame({"path": paths})
 # Extract dicom_id from the filename stem
