@@ -49,6 +49,8 @@ print("Output feature representation shape:", features.shape)
 features = features.cpu()
 image_embedding = features / features.norm(p=2, dim=-1, keepdim=True)  # Normalize the embedding
 
+print(image_embedding.shape)
+
 plt.figure(figsize=(12, 4))
 for vector in image_embedding.numpy():
     plt.plot(vector)
