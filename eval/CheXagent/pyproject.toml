@@ -1,0 +1,11 @@
+[project]
+name = "chexagent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "lancedb>=0.34.0",
+    "matplotlib>=3.11.0",
+    "pandas>=3.0.3",
+]
