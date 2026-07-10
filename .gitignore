@@ -9,6 +9,7 @@ __pycache__/
 
 # Models
 *.pt
+*.pths
 *.h5
 *.pb
 **/checkpoints/
