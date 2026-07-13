@@ -1,0 +1,20 @@
+[project]
+name = "chexfound"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fvcore>=0.1.5.post20221221",
+    "iopath>=0.1.10",
+    "matplotlib>=3.9.4",
+    "numpy<2",
+    "omegaconf>=2.3.1",
+    "opencv-python-headless>=4.11.0.86",
+    "pandas>=2.3.3",
+    "scikit-image>=0.24.0",
+    "scikit-learn>=1.6.1",
+    "scikit-multilearn>=0.2.0",
+    "setuptools==59.6.0",
+    "transformers<4.34.0",
+]
