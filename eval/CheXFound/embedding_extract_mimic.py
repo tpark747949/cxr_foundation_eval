@@ -1,37 +1,27 @@
 import os
-import logging
 import pandas as pd
 import numpy as np
 import pyarrow as pa
 import lancedb
-import torch
-import torch.multiprocessing as mp
-from torch.utils.data import Dataset, DataLoader
+import multiprocessing as mp
 from PIL import Image
 from argparse import Namespace
 
-# Import your custom modules
-from chexfound.eval.setup import setup_and_build_model
-from chexfound.data.transforms import make_classification_eval_transform
-
 # ==========================================
-# 0. GLOBAL CONFIGURATION
+# 0. GLOBAL CONFIGURATION & PICKLABLE DATASET
 # ==========================================
-if __name__ == '__main__':
-    mp.set_start_method('spawn', force=True)
+# CRITICAL: Do NOT import torch, torchvision, or chexfound here!
 
 DATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"  # Change to your symlink target
 METADATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"
 URI = "../../embeddings/MIMIC-CXR-JPG"
 BASE_DIR = './checkpoints/'
 
-# GPU Allocation
 AVAILABLE_GPUS = [0, 1, 2, 3]  
-BATCH_SIZE = 128               
+BATCH_SIZE = 256       
 NUM_WORKERS_PER_GPU = 8        
 WRITE_BUFFER_SIZE = 2500     
 
-# Model Config Mock
 CHEXFOUND_ARGS = Namespace(
     config_file=os.path.join(BASE_DIR, 'config.yaml'),
     pretrained_weights=os.path.join(BASE_DIR, 'teacher_checkpoint.pth'),
@@ -46,10 +36,11 @@ CHEXFOUND_ARGS = Namespace(
     num_heads=8,
 )
 
-# ==========================================
-# 1. PYTORCH DATASET DESIGN 
-# ==========================================
-class MimicCxrChexFoundDataset(Dataset):
+class MimicCxrChexFoundDataset(object):
+    """
+    Defined at the module level so it is 100% picklable by background DataLoader workers.
+    Inherits from object to avoid importing torch in the global scope.
+    """
     def __init__(self, dataframe, base_dir, transform):
         self.df = dataframe
         self.base_dir = base_dir
@@ -61,33 +52,39 @@ class MimicCxrChexFoundDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = os.path.join(self.base_dir, row["path"])
-        
-        # 100% clean dataset - no try/except overhead
         img = Image.open(img_path).convert("RGB")
         img_tensor = self.transform(img)
-        
         return img_tensor, idx
 
 # ==========================================
-# 2. THE ISOLATED GPU WORKER
+# 1. THE ISOLATED GPU WORKER
 # ==========================================
-def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args):
-    """This worker runs independently on a single specified GPU."""
+def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args, data_dir, uri):
+    """
+    This worker runs in total isolation. By setting the environment variable 
+    BEFORE importing PyTorch, we guarantee zero CUDA context collisions.
+    """
     
+    # 1. BLIND THE PROCESS BEFORE PYTORCH WAKES UP
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    device = torch.device("cuda:0")
     
-    print(f"[GPU {gpu_id}] Initializing. Processing {len(df_chunk)} images...")
+    # 2. LATE IMPORTS - PyTorch initializes here, seeing only 1 GPU.
+    import torch
+    from torch.utils.data import DataLoader
+    from chexfound.eval.setup import setup_and_build_model
+    from chexfound.data.transforms import make_classification_eval_transform
 
-    # 1. Initialize Transform
+    # Because of CUDA_VISIBLE_DEVICES, "cuda:0" safely maps to the assigned GPU.
+    device = torch.device("cuda:0")
+    print(f"[GPU {gpu_id}] Initializing. PyTorch sees {torch.cuda.device_count()} GPU(s). Processing {len(df_chunk)} images...")
+
+    # 3. INITIALIZE MODEL & TRANSFORMS
     eval_transform = make_classification_eval_transform(
         resize_size=args.image_size, crop_size=args.image_size
     )
 
-    # 2. Setup and Build Model
     model, autocast_dtype = setup_and_build_model(args)
 
-    # 3. Load Checkpoint and Strip Prefixes
     state_dict = torch.load(args.pretrained_weights, map_location="cpu")['teacher']
     new_state_dict = {}
     for k, v in state_dict.items():
@@ -105,19 +102,16 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args):
     model = model.to(device)
     model.eval()
 
-    # 4. Dynamic Dimension Probe
+    # 4. DYNAMIC DIMENSION PROBE
     with torch.no_grad():
         dummy_input = torch.zeros((1, 3, args.image_size, args.image_size), device=device)
         dummy_features = model.get_intermediate_layers(
-            dummy_input,
-            n=args.n_last_blocks,
-            return_class_token=args.return_class_token,
+            dummy_input, n=args.n_last_blocks, return_class_token=args.return_class_token
         )
-        # Extract the [CLS] token from the final block
         dummy_output = dummy_features[-1][1]
         EMBEDDING_DIM = dummy_output.shape[-1]
     
-    # 5. Construct LanceDB Schema
+    # 5. LANCEDB SCHEMA
     schema = pa.schema([
         pa.field("path", pa.string()),
         pa.field("dicom_id", pa.string()),
@@ -138,46 +132,39 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args):
         pa.field("embedding_l2", pa.list_(pa.float32(), EMBEDDING_DIM)),
     ])
 
-    db = lancedb.connect(URI)
+    db = lancedb.connect(uri)
     table_name = f"CheXfound_MIMIC_Part_{gpu_id}"
     table = db.create_table(table_name, schema=schema, mode="overwrite")
 
-    # 6. Initialize DataLoader
+    # 6. DATALOADER
     dataloader = DataLoader(
-        MimicCxrChexFoundDataset(df_chunk, DATA_DIR, eval_transform), 
+        MimicCxrChexFoundDataset(df_chunk, data_dir, eval_transform), 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
         num_workers=NUM_WORKERS_PER_GPU,
         pin_memory=True 
     )
 
-    # 7. Inference Loop
+    # 7. INFERENCE LOOP
     buffer_records = []
     
-    # Use the autocast_dtype returned by your setup function!
     with torch.no_grad(), torch.autocast(device_type='cuda', dtype=autocast_dtype):
         for imgs_batch, indices in dataloader:
-            
             valid_imgs = imgs_batch.to(device, non_blocking=True)
             
-            # Extract intermediate representations
             features = model.get_intermediate_layers(
-                valid_imgs,
-                n=args.n_last_blocks,
-                return_class_token=args.return_class_token,
+                valid_imgs, n=args.n_last_blocks, return_class_token=args.return_class_token
             )
             
-            # features[-1] = final block. [1] = CLS token. Shape drops to (Batch, 1024)
             raw_outs = features[-1][1]
             l2_outs = raw_outs / raw_outs.norm(p=2, dim=-1, keepdim=True)
             
             raw_outs_np = raw_outs.cpu().to(torch.float32).numpy()
             l2_outs_np = l2_outs.cpu().to(torch.float32).numpy()
-
             indices_np = indices.numpy()
+
             for idx_in_batch, global_idx in enumerate(indices_np):
                 row = df_chunk.iloc[global_idx]
-                
                 record = {
                     "path": str(row["path"]),
                     "dicom_id": str(row["dicom_id"]),
@@ -210,12 +197,14 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args):
     print(f"[GPU {gpu_id}] Finished! Total rows in {table_name}: {len(table)}")
 
 # ==========================================
-# 3. MAIN PROCESS COORDINATOR
+# 2. MAIN PROCESS COORDINATOR
 # ==========================================
 if __name__ == '__main__':
+    mp.set_start_method('spawn', force=True)
+    
     print("Loading and indexing metadata files...")
 
-    with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES.txt"), "r") as f:
+    with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES"), "r") as f:
         paths = [line.strip() for line in f if line.strip()]
     df_paths = pd.DataFrame({"path": paths})
     df_paths["dicom_id"] = df_paths["path"].apply(lambda x: os.path.splitext(os.path.basename(x))[0])
@@ -253,7 +242,6 @@ if __name__ == '__main__':
 
     print(f"Total records to process: {len(df_master)}")
 
-    # Safely shard Dataframe
     chunk_indices = np.array_split(np.arange(len(df_master)), len(AVAILABLE_GPUS))
     chunks = [df_master.iloc[indices].reset_index(drop=True) for indices in chunk_indices]
 
@@ -261,11 +249,11 @@ if __name__ == '__main__':
     
     processes = []
     for i, gpu_id in enumerate(AVAILABLE_GPUS):
-        p = mp.Process(target=run_gpu_worker, args=(gpu_id, chunks[i], clean_label_cols, CHEXFOUND_ARGS))
+        p = mp.Process(target=run_gpu_worker, args=(gpu_id, chunks[i], clean_label_cols, CHEXFOUND_ARGS, DATA_DIR, URI))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
 
-    print("All GPUs have finished processing! You can merge the LanceDB partitions natively.")
+    print("All GPUs have finished processing!")
