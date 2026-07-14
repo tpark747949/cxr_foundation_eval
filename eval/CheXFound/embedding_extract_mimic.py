@@ -5,42 +5,37 @@ import pyarrow as pa
 import lancedb
 import multiprocessing as mp
 from PIL import Image
-from argparse import Namespace
 
 # ==========================================
-# 0. GLOBAL CONFIGURATION & PICKLABLE DATASET
+# 0. GLOBAL CONFIGURATION
 # ==========================================
-# CRITICAL: Do NOT import torch, torchvision, or chexfound here!
+# NO PyTorch imports here!
 
-DATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"  # Change to your symlink target
+DATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"
 METADATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0"
 URI = "../../embeddings/MIMIC-CXR-JPG"
 BASE_DIR = './checkpoints/'
 
 AVAILABLE_GPUS = [0, 1, 2, 3]  
-BATCH_SIZE = 256       
-NUM_WORKERS_PER_GPU = 8        
+BATCH_SIZE = 128               
 WRITE_BUFFER_SIZE = 2500     
 
-CHEXFOUND_ARGS = Namespace(
-    config_file=os.path.join(BASE_DIR, 'config.yaml'),
-    pretrained_weights=os.path.join(BASE_DIR, 'teacher_checkpoint.pth'),
-    output_dir=os.path.join(BASE_DIR, 'example'),
-    opts=[],
-    image_size=512,
-    patch_size=16,
-    n_register_tokens=4,
-    n_last_blocks=4,
-    return_class_token=True,
-    num_classes=40,
-    num_heads=8,
-)
+# Pass args as a dict to guarantee 100% safe pickling to child processes
+CHEXFOUND_ARGS = {
+    "config_file": os.path.join(BASE_DIR, 'config.yaml'),
+    "pretrained_weights": os.path.join(BASE_DIR, 'teacher_checkpoint.pth'),
+    "output_dir": os.path.join(BASE_DIR, 'example'),
+    "opts": [],
+    "image_size": 512,
+    "patch_size": 16,
+    "n_register_tokens": 4,
+    "n_last_blocks": 4,
+    "return_class_token": True,
+    "num_classes": 40,
+    "num_heads": 8,
+}
 
-class MimicCxrChexFoundDataset(object):
-    """
-    Defined at the module level so it is 100% picklable by background DataLoader workers.
-    Inherits from object to avoid importing torch in the global scope.
-    """
+class MimicCxrChexFoundDataset:
     def __init__(self, dataframe, base_dir, transform):
         self.df = dataframe
         self.base_dir = base_dir
@@ -59,26 +54,25 @@ class MimicCxrChexFoundDataset(object):
 # ==========================================
 # 1. THE ISOLATED GPU WORKER
 # ==========================================
-def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args, data_dir, uri):
-    """
-    This worker runs in total isolation. By setting the environment variable 
-    BEFORE importing PyTorch, we guarantee zero CUDA context collisions.
-    """
+def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args_dict, data_dir, uri):
     
-    # 1. BLIND THE PROCESS BEFORE PYTORCH WAKES UP
+    # 1. Blind the process to other GPUs BEFORE anything imports PyTorch
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
-    # 2. LATE IMPORTS - PyTorch initializes here, seeing only 1 GPU.
+    # 2. Late imports 
     import torch
     from torch.utils.data import DataLoader
+    from argparse import Namespace
     from chexfound.eval.setup import setup_and_build_model
     from chexfound.data.transforms import make_classification_eval_transform
 
-    # Because of CUDA_VISIBLE_DEVICES, "cuda:0" safely maps to the assigned GPU.
+    # Reconstruct Namespace inside the isolated process
+    args = Namespace(**args_dict)
+    
     device = torch.device("cuda:0")
-    print(f"[GPU {gpu_id}] Initializing. PyTorch sees {torch.cuda.device_count()} GPU(s). Processing {len(df_chunk)} images...")
+    print(f"[GPU {gpu_id}] Initializing. Processing {len(df_chunk)} images...")
 
-    # 3. INITIALIZE MODEL & TRANSFORMS
+    # 3. Model setup
     eval_transform = make_classification_eval_transform(
         resize_size=args.image_size, crop_size=args.image_size
     )
@@ -102,7 +96,7 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args, data_dir, uri):
     model = model.to(device)
     model.eval()
 
-    # 4. DYNAMIC DIMENSION PROBE
+    # 4. Dimension probe
     with torch.no_grad():
         dummy_input = torch.zeros((1, 3, args.image_size, args.image_size), device=device)
         dummy_features = model.get_intermediate_layers(
@@ -111,7 +105,7 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args, data_dir, uri):
         dummy_output = dummy_features[-1][1]
         EMBEDDING_DIM = dummy_output.shape[-1]
     
-    # 5. LANCEDB SCHEMA
+    # 5. LanceDB Schema
     schema = pa.schema([
         pa.field("path", pa.string()),
         pa.field("dicom_id", pa.string()),
@@ -136,16 +130,17 @@ def run_gpu_worker(gpu_id, df_chunk, clean_label_cols, args, data_dir, uri):
     table_name = f"CheXfound_MIMIC_Part_{gpu_id}"
     table = db.create_table(table_name, schema=schema, mode="overwrite")
 
-    # 6. DATALOADER
+    # 6. DataLoader - num_workers=0 completely eliminates nested pickling
+    dataset = MimicCxrChexFoundDataset(df_chunk, data_dir, eval_transform)
     dataloader = DataLoader(
-        MimicCxrChexFoundDataset(df_chunk, data_dir, eval_transform), 
+        dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
-        num_workers=NUM_WORKERS_PER_GPU,
+        num_workers=0,  
         pin_memory=True 
     )
 
-    # 7. INFERENCE LOOP
+    # 7. Inference Loop
     buffer_records = []
     
     with torch.no_grad(), torch.autocast(device_type='cuda', dtype=autocast_dtype):
@@ -204,8 +199,10 @@ if __name__ == '__main__':
     
     print("Loading and indexing metadata files...")
 
+    # Updated file extension
     with open(os.path.join(METADATA_DIR, "IMAGE_FILENAMES"), "r") as f:
         paths = [line.strip() for line in f if line.strip()]
+    
     df_paths = pd.DataFrame({"path": paths})
     df_paths["dicom_id"] = df_paths["path"].apply(lambda x: os.path.splitext(os.path.basename(x))[0])
 
