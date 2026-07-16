@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 from argparse import Namespace
 
-# Import your custom modules normally now that we are on a single process
+# Import your custom modules
 from chexfound.eval.setup import setup_and_build_model
 from chexfound.data.transforms import make_classification_eval_transform
 
@@ -21,7 +21,7 @@ URI = "../../embeddings/MIMIC-CXR-JPG"
 BASE_DIR = './checkpoints/'
 
 TARGET_GPU = 0
-BATCH_SIZE = 512               
+BATCH_SIZE = 128               
 NUM_WORKERS = 8        
 WRITE_BUFFER_SIZE = 2500     
 
@@ -112,14 +112,14 @@ if __name__ == '__main__':
     # Setup Device
     torch.cuda.set_device(TARGET_GPU)
     device = torch.device(f"cuda:{TARGET_GPU}")
-    print(f"PyTorch initialized on {device}.")
+    print(f"PyTorch initialized on {device}. Using bfloat16 to prevent overflows.")
 
     # Model Setup
     eval_transform = make_classification_eval_transform(
         resize_size=CHEXFOUND_ARGS.image_size, crop_size=CHEXFOUND_ARGS.image_size
     )
 
-    model, autocast_dtype = setup_and_build_model(CHEXFOUND_ARGS)
+    model, _ = setup_and_build_model(CHEXFOUND_ARGS)
 
     state_dict = torch.load(CHEXFOUND_ARGS.pretrained_weights, map_location="cpu")['teacher']
     new_state_dict = {}
@@ -139,7 +139,7 @@ if __name__ == '__main__':
     model.eval()
 
     # Dimension Probe
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         dummy_input = torch.zeros((1, 3, CHEXFOUND_ARGS.image_size, CHEXFOUND_ARGS.image_size), device=device)
         dummy_features = model.get_intermediate_layers(
             dummy_input, n=CHEXFOUND_ARGS.n_last_blocks, return_class_token=CHEXFOUND_ARGS.return_class_token
@@ -169,7 +169,7 @@ if __name__ == '__main__':
     ])
 
     db = lancedb.connect(URI)
-    table_name = "CheXfound_MIMIC_Master"
+    table_name = "CheXfound_MIMIC"
     table = db.create_table(table_name, schema=schema, mode="overwrite")
 
     # Dataloader
@@ -185,7 +185,8 @@ if __name__ == '__main__':
     # Inference Loop
     buffer_records = []
     
-    with torch.no_grad(), torch.autocast(device_type='cuda', dtype=autocast_dtype):
+    # EXPLICITLY FORCING BFLOAT16 HERE
+    with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         for imgs_batch, indices in dataloader:
             valid_imgs = imgs_batch.to(device, non_blocking=True)
             
@@ -195,17 +196,16 @@ if __name__ == '__main__':
             
             raw_outs = features[-1][1]
             
-            # --- ANOMALY DETECTION BLOCK ---
+            # --- SAFETY NET ---
             if torch.isnan(raw_outs).any() or torch.isinf(raw_outs).any():
-                # Replace bad vectors with zeros before they ruin the L2 norm
                 raw_outs = torch.nan_to_num(raw_outs, nan=0.0, posinf=0.0, neginf=0.0)
                 bad_indices = indices[torch.isnan(features[-1][1]).any(dim=-1).cpu()]
                 for bad_idx in bad_indices:
                     bad_dicom = df_master.iloc[bad_idx.item()]["dicom_id"]
                     print(f"\n[WARNING] Math overflow detected on DICOM ID: {bad_dicom}. Saved as zero-vector.")
-            # -------------------------------
+            # ------------------
 
-            l2_outs = raw_outs / (raw_outs.norm(p=2, dim=-1, keepdim=True) + 1e-8) # Added epsilon for safety
+            l2_outs = raw_outs / (raw_outs.norm(p=2, dim=-1, keepdim=True) + 1e-8) 
             
             raw_outs_np = raw_outs.cpu().to(torch.float32).numpy()
             l2_outs_np = l2_outs.cpu().to(torch.float32).numpy()
