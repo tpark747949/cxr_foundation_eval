@@ -6,5 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "lancedb>=0.34.0",
+    "pandas>=3.0.5",
     "scikit-learn>=1.9.0",
 ]
