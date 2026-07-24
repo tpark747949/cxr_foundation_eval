@@ -10,14 +10,16 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 
 # --- Configuration & Constants ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "gpu_evaluation_artifacts"
+OUTPUT_DIR = "torch_evaluation_artifacts"
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation"]
-VARIANTS = ["raw", "l2"]
+# Variants: Raw, L2-normalized, and PCA-reduced (fitted on Raw)
+VARIANTS = ["raw", "l2", "pca_95"]
 
 CHEXPERT_DISEASES = [
     "Atelectasis", "Cardiomegaly", "Consolidation", "Edema",
@@ -26,19 +28,17 @@ CHEXPERT_DISEASES = [
     "Pneumothorax", "Pleural_Other", "Support_Devices", "No_Finding"
 ]
 
-# --- PyTorch Model & Early Stopping ---
+# --- PyTorch Linear Model (No Dropout) ---
 class MultiLabelLogReg(nn.Module):
     def __init__(self, input_dim, num_classes):
         super().__init__()
-        # A single linear layer without activation is mathematically equivalent to LR logits
         self.linear = nn.Linear(input_dim, num_classes)
         
     def forward(self, x):
         return self.linear(x)
 
 class EarlyStopping:
-    """Stops training if validation AUC doesn't improve after a given patience."""
-    def __init__(self, patience=5, min_delta=0.001):
+    def __init__(self, patience=5, min_delta=0.0002):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -56,20 +56,26 @@ class EarlyStopping:
                 return True
         return False
 
-# --- Core Training Function ---
-def train_pytorch_model(
+def calculate_auc(y_true, y_prob):
+    aucs = [
+        roc_auc_score(y_true[:, i], y_prob[:, i]) 
+        if len(np.unique(y_true[:, i])) > 1 else np.nan 
+        for i in range(len(CHEXPERT_DISEASES))
+    ]
+    return np.nanmean(aucs)
+
+# --- Core GPU Trainer ---
+def train_model(
     model_id, X_train, y_train, X_val, y_val, X_test, y_test, 
-    batch_size=2048, epochs=100, lr=1e-3, weight_decay=1e-2
+    batch_size=4096, epochs=100, lr=1e-3, weight_decay=1e-3
 ):
-    print(f"\n--- Training: {model_id} (Features: {X_train.shape[1]}) ---")
+    print(f"\n--- Training: {model_id} | Input Dim: {X_train.shape[1]} ---")
     
-    # Scale Data (CPU side)
+    # Scale Data
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s = scaler.transform(X_val)
     X_test_s = scaler.transform(X_test)
-
-    joblib.dump(scaler, os.path.join(OUTPUT_DIR, f"scaler_{model_id}.joblib"))
 
     # Convert to Tensors
     X_tr_t = torch.tensor(X_train_s, dtype=torch.float32)
@@ -79,7 +85,7 @@ def train_pytorch_model(
 
     train_loader = DataLoader(TensorDataset(X_tr_t, y_tr_t), batch_size=batch_size, shuffle=True, num_workers=4)
 
-    # Initialize Model & Multi-GPU
+    # Setup PyTorch Model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MultiLabelLogReg(X_train.shape[1], y_train.shape[1])
     
@@ -87,64 +93,47 @@ def train_pytorch_model(
         model = nn.DataParallel(model)
     model = model.to(device)
 
-    # Handle Class Imbalance dynamically
+    # Mild square-root class weighting to avoid extreme penalties
     pos_counts = y_train.sum(axis=0)
     neg_counts = len(y_train) - pos_counts
-    # Avoid division by zero if a class has 0 positives
-    pos_weight = np.where(pos_counts > 0, neg_counts / pos_counts, 1.0)
+    pos_weight = np.sqrt(np.where(pos_counts > 0, neg_counts / pos_counts, 1.0))
     pos_weight_t = torch.tensor(pos_weight, dtype=torch.float32).to(device)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_t)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    early_stopping = EarlyStopping(patience=10, min_delta=0.001)
+    early_stopping = EarlyStopping(patience=5, min_delta=0.0005)
 
-    # Move validation sets to GPU for fast evaluation
     X_v_t = X_v_t.to(device)
-    
-    def calculate_auc(y_true, y_prob):
-        aucs = [
-            roc_auc_score(y_true[:, i], y_prob[:, i]) 
-            if len(np.unique(y_true[:, i])) > 1 else np.nan 
-            for i in range(len(CHEXPERT_DISEASES))
-        ]
-        return np.nanmean(aucs)
 
-    # Training Loop
+    # Fast Training Loop
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0.0
         
         for batch_X, batch_y in train_loader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            
             optimizer.zero_grad()
             logits = model(batch_X)
             loss = criterion(logits, batch_y)
             loss.backward()
             optimizer.step()
-            
             epoch_loss += loss.item()
 
-        # Validation Step
         model.eval()
         with torch.no_grad():
-            val_logits = model(X_v_t)
-            val_probs = torch.sigmoid(val_logits).cpu().numpy()
+            val_probs = torch.sigmoid(model(X_v_t)).cpu().numpy()
             
         current_val_auc = calculate_auc(y_val, val_probs)
-        
-        print(f"Epoch {epoch+1:03d} | Loss: {epoch_loss/len(train_loader):.4f} | Val AUC: {current_val_auc:.4f}")
+        print(f"Epoch {epoch+1:02d}/{epochs} | Loss: {epoch_loss/len(train_loader):.4f} | Val AUC: {current_val_auc:.4f}")
 
-        # Check Early Stopping
         if early_stopping(current_val_auc, model):
-            print(f"Early stopping triggered at epoch {epoch+1}. Restoring best weights (AUC: {early_stopping.best_score:.4f}).")
+            print(f"Early stopping at epoch {epoch+1}. Best Val AUC: {early_stopping.best_score:.4f}")
             break
             
-    # Load best weights
+    # Load Best Model
     model.load_state_dict(early_stopping.best_weights)
-    torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, f"model_{model_id}.pt"))
-
-    # Final Evaluation (Best Model)
+    
+    # Final Inference
     model.eval()
     with torch.no_grad():
         X_te_t = X_te_t.to(device)
@@ -157,7 +146,7 @@ def train_pytorch_model(
     best_val_auc = calculate_auc(y_val, best_val_probs)
     test_auc = calculate_auc(y_test, test_probs)
     
-    print(f"--- FINAL {model_id} | Val AUC: {best_val_auc:.4f} | Test AUC: {test_auc:.4f} ---")
+    print(f"--> Result [{model_id}] Val AUC: {best_val_auc:.4f} | Test AUC: {test_auc:.4f}")
     return best_val_auc, test_auc
 
 
@@ -181,7 +170,9 @@ def main():
     tbl = db.open_table(TABLE_NAME)
     df = tbl.to_pandas()
 
-    # Filters
+    torch.multiprocessing.set_start_method('spawn', force=True)
+
+    # Masks
     valid_data_mask = (df["ignore"] != 1)
     view_data_mask = (df["ViewCodeSequence_CodeMeaning"] == "postero-anterior")
     base_mask = valid_data_mask & view_data_mask
@@ -200,39 +191,56 @@ def main():
 
     results = []
 
-    # 1. Foundation Models
+    # 1. Individual Foundation Models
     for model_name in MODELS:
-        for variant in VARIANTS:
+        for variant in ["raw", "l2"]:
             col_key = f"{model_name}_{variant}"
-            X_train = np.vstack(df.loc[train_mask, col_key].values)
-            X_val = np.vstack(df.loc[val_mask, col_key].values)
-            X_test = np.vstack(df.loc[test_mask, col_key].values)
-            
-            # Weight decay maps conceptually to the inverse of C in sklearn
-            # Smaller embeddings need less regularization, large ones (CXR_Found) need more
-            wd = 1e-1 if model_name == "CXR_Foundation" else 1e-2
-            
-            v_auc, t_auc = train_pytorch_model(
-                col_key, X_train, y_train, X_val, y_val, X_test, y_test, 
-                weight_decay=wd
-            )
+            X_tr = np.vstack(df.loc[train_mask, col_key].values)
+            X_v = np.vstack(df.loc[val_mask, col_key].values)
+            X_te = np.vstack(df.loc[test_mask, col_key].values)
+
+            # Fit Raw / L2
+            v_auc, t_auc = train_model(col_key, X_tr, y_train, X_v, y_val, X_te, y_test)
             results.append({"Model": model_name, "Variant": variant, "Val_AUC": v_auc, "Test_AUC": t_auc})
 
-    # 2. Early Fusion
-    for variant in VARIANTS:
-        X_train_fusion = np.hstack([np.vstack(df.loc[train_mask, f"{m}_{variant}"].values) for m in MODELS])
-        X_val_fusion = np.hstack([np.vstack(df.loc[val_mask, f"{m}_{variant}"].values) for m in MODELS])
-        X_test_fusion = np.hstack([np.vstack(df.loc[test_mask, f"{m}_{variant}"].values) for m in MODELS])
-        
-        # Very high weight decay for the ~8k dimensional fusion space
-        v_auc, t_auc = train_pytorch_model(
-            f"Early_Fusion_{variant}", X_train_fusion, y_train, X_val_fusion, y_val, X_test_fusion, y_test, 
-            weight_decay=0.5
-        )
+        # Generate PCA_95 variant from RAW embeddings
+        raw_key = f"{model_name}_raw"
+        X_tr_raw = np.vstack(df.loc[train_mask, raw_key].values)
+        X_v_raw = np.vstack(df.loc[val_mask, raw_key].values)
+        X_te_raw = np.vstack(df.loc[test_mask, raw_key].values)
+
+        pca = PCA(n_components=0.95, svd_solver="auto")
+        X_tr_pca = pca.fit_transform(X_tr_raw)
+        X_v_pca = pca.transform(X_v_raw)
+        X_te_pca = pca.transform(X_te_raw)
+
+        v_auc, t_auc = train_model(f"{model_name}_pca_95", X_tr_pca, y_train, X_v_pca, y_val, X_te_pca, y_test)
+        results.append({"Model": model_name, "Variant": "pca_95", "Val_AUC": v_auc, "Test_AUC": t_auc})
+
+    # 2. Early Fusion Ensemble
+    for variant in ["raw", "l2"]:
+        X_tr_f = np.hstack([np.vstack(df.loc[train_mask, f"{m}_{variant}"].values) for m in MODELS])
+        X_v_f = np.hstack([np.vstack(df.loc[val_mask, f"{m}_{variant}"].values) for m in MODELS])
+        X_te_f = np.hstack([np.vstack(df.loc[test_mask, f"{m}_{variant}"].values) for m in MODELS])
+
+        v_auc, t_auc = train_model(f"Early_Fusion_{variant}", X_tr_f, y_train, X_v_f, y_val, X_te_f, y_test)
         results.append({"Model": "Early_Fusion", "Variant": variant, "Val_AUC": v_auc, "Test_AUC": t_auc})
 
+    # Early Fusion PCA_95
+    X_tr_f_raw = np.hstack([np.vstack(df.loc[train_mask, f"{m}_raw"].values) for m in MODELS])
+    X_v_f_raw = np.hstack([np.vstack(df.loc[val_mask, f"{m}_raw"].values) for m in MODELS])
+    X_te_f_raw = np.hstack([np.vstack(df.loc[test_mask, f"{m}_raw"].values) for m in MODELS])
+
+    pca_f = PCA(n_components=0.95, svd_solver="auto")
+    X_tr_f_pca = pca_f.fit_transform(X_tr_f_raw)
+    X_v_f_pca = pca_f.transform(X_v_f_raw)
+    X_te_f_pca = pca_f.transform(X_te_f_raw)
+
+    v_auc, t_auc = train_model("Early_Fusion_pca_95", X_tr_f_pca, y_train, X_v_f_pca, y_val, X_te_f_pca, y_test)
+    results.append({"Model": "Early_Fusion", "Variant": "pca_95", "Val_AUC": v_auc, "Test_AUC": t_auc})
+
     pd.DataFrame(results).to_csv(os.path.join(OUTPUT_DIR, "roc_auc_summary.csv"), index=False)
-    print("All models trained and artifacts saved.")
+    print("\nTraining completed! All evaluation artifacts generated.")
 
 if __name__ == "__main__":
     main()
