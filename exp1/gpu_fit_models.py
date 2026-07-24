@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 # --- Configuration & Constants ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "torch_evaluation_artifacts"
+OUTPUT_DIR = "torch_lr_artifacts"
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation"]
 # Variants: Raw, L2-normalized, and PCA-reduced (fitted on Raw)
@@ -143,6 +143,9 @@ def train_model(
     np.save(os.path.join(OUTPUT_DIR, f"{model_id}_val_probs.npy"), best_val_probs)
     np.save(os.path.join(OUTPUT_DIR, f"{model_id}_test_probs.npy"), test_probs)
 
+    torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, f"{model_id}_weights.pt"))
+    joblib.dump(scaler, os.path.join(OUTPUT_DIR, f"{model_id}_scaler.joblib"))
+
     best_val_auc = calculate_auc(y_val, best_val_probs)
     test_auc = calculate_auc(y_test, test_probs)
     
@@ -214,8 +217,11 @@ def main():
         X_v_pca = pca.transform(X_v_raw)
         X_te_pca = pca.transform(X_te_raw)
 
+        joblib.dump(pca, os.path.join(OUTPUT_DIR, f"{model_name}_pca_object.joblib"))
+
         v_auc, t_auc = train_model(f"{model_name}_pca_95", X_tr_pca, y_train, X_v_pca, y_val, X_te_pca, y_test)
         results.append({"Model": model_name, "Variant": "pca_95", "Val_AUC": v_auc, "Test_AUC": t_auc})
+
 
     # 2. Early Fusion Ensemble
     for variant in ["raw", "l2"]:
@@ -235,6 +241,8 @@ def main():
     X_tr_f_pca = pca_f.fit_transform(X_tr_f_raw)
     X_v_f_pca = pca_f.transform(X_v_f_raw)
     X_te_f_pca = pca_f.transform(X_te_f_raw)
+
+    joblib.dump(pca_f, os.path.join(OUTPUT_DIR, "Early_Fusion_pca_object.joblib"))
 
     v_auc, t_auc = train_model("Early_Fusion_pca_95", X_tr_f_pca, y_train, X_v_f_pca, y_val, X_te_f_pca, y_test)
     results.append({"Model": "Early_Fusion", "Variant": "pca_95", "Val_AUC": v_auc, "Test_AUC": t_auc})

@@ -15,5 +15,9 @@ __pycache__/
 **/checkpoints/
 /eval/EVA-X/EVA-X/
 
+# misc
+*.joblib
+*.npy
+
 # Embeddings
 embeddings/*
