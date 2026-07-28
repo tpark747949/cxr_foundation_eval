@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-OUTPUT_DIR = "evaluation_artifacts"
+OUTPUT_DIR = "xgboost_evaluation_artifacts"
 
 def main():
     csv_path = os.path.join(OUTPUT_DIR, "roc_auc_summary.csv")

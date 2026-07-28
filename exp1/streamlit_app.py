@@ -4,9 +4,9 @@ import streamlit as st
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc, precision_recall_fscore_support, confusion_matrix
 
-OUTPUT_DIR = "evaluation_artifacts"
-MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
-VARIANTS = ["raw", "l2"]
+OUTPUT_DIR = "xgboost_evaluation_artifacts"
+MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation"]
+VARIANTS = ["raw", "l2", "pca_95"]
 CHEXPERT_DISEASES = [
     "Atelectasis", "Cardiomegaly", "Consolidation", "Edema",
     "Enlarged_Cardiomediastinum", "Fracture", "Lung_Lesion",

@@ -18,6 +18,7 @@ __pycache__/
 # misc
 *.joblib
 *.npy
+*.json
 
 # Embeddings
 embeddings/*
