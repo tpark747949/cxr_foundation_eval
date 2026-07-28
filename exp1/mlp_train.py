@@ -60,7 +60,7 @@ class HarmonicMLP(nn.Module):
         return self.net(x)
 
 class EarlyStopping:
-    def __init__(self, patience=5, min_delta=0.0005):
+    def __init__(self, patience=5, min_delta=0.0001):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -88,7 +88,7 @@ def calculate_auc(y_true, y_prob):
 
 
 # --- GPU Worker Function ---
-def train_mlp_trial(trial_idx, config, model_name, X_tr, y_tr, X_v, y_v, X_te):
+def train_mlp_trial(trial_idx, config, model_name, X_tr, y_tr, X_v, y_v, X_te, y_te):
     """
     Sandboxed worker to run a single hyperparameter configuration on a dedicated GPU.
     """
@@ -135,7 +135,7 @@ def train_mlp_trial(trial_idx, config, model_name, X_tr, y_tr, X_v, y_v, X_te):
     best_weights = None
     
     # Training Loop
-    for epoch in range(50):
+    for epoch in range(200):
         model.train()
         for batch_X, batch_y in train_loader:
             optimizer.zero_grad()
@@ -162,12 +162,13 @@ def train_mlp_trial(trial_idx, config, model_name, X_tr, y_tr, X_v, y_v, X_te):
     model.eval()
     with torch.no_grad():
         best_val_probs = torch.sigmoid(model(X_v_t)).cpu().numpy()
-        test_probs = torch.sigmoid(model(X_te_t)).cpu().numpy()
+        best_test_probs = torch.sigmoid(model(X_te_t)).cpu().numpy()
         
+    # 2. Fix the calculation inside the function
     final_val_auc = early_stopping.best_score
-    final_test_auc = calculate_auc(y_v, test_probs) # using y_v as placeholder shape, use actual true below
+    final_test_auc = calculate_auc(y_te, best_test_probs)  # ✅ Fixed to use y_te
     
-    return config, final_val_auc, final_test_auc, best_val_probs, test_probs, best_weights, scaler
+    return config, final_val_auc, final_test_auc, best_val_probs, best_test_probs, best_weights, scaler
 
 
 def process_labels(df_labels):
@@ -221,7 +222,7 @@ def main():
         # Run Grid in Parallel across 4 GPUs
         results = Parallel(n_jobs=NUM_GPUS, backend="loky")(
             delayed(train_mlp_trial)(
-                idx, config, model_name, X_tr, y_train, X_v, y_val, X_te
+                idx, config, model_name, X_tr, y_train, X_v, y_val, X_te, y_test  # ✅ Added y_test
             ) for idx, config in enumerate(grid)
         )
         
