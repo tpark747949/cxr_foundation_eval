@@ -15,7 +15,9 @@ from sklearn.decomposition import PCA
 # --- Configuration & Constants ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "torch_lr_artifacts"
+#OUTPUT_DIR = "torch_lr_artifacts"
+OUTPUT_DIR = "negbio_torch_lr_artifacts"
+
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation"]
 # Variants: Raw, L2-normalized, and PCA-reduced (fitted on Raw)
@@ -185,9 +187,13 @@ def main():
     test_mask = base_mask & (df["split"] == "test")
 
     # Labels
-    y_train = process_labels(df.loc[train_mask, "CheXpert_labels"])
-    y_val = process_labels(df.loc[val_mask, "CheXpert_labels"])
-    y_test = process_labels(df.loc[test_mask, "CheXpert_labels"])
+    #y_train = process_labels(df.loc[train_mask, "CheXpert_labels"])
+    #y_val = process_labels(df.loc[val_mask, "CheXpert_labels"])
+    #y_test = process_labels(df.loc[test_mask, "CheXpert_labels"])
+
+    y_train = process_labels(df.loc[train_mask, "NegBio_labels"])
+    y_val = process_labels(df.loc[val_mask, "NegBio_labels"])
+    y_test = process_labels(df.loc[test_mask, "NegBio_labels"])
 
     np.save(os.path.join(OUTPUT_DIR, "y_val_true.npy"), y_val)
     np.save(os.path.join(OUTPUT_DIR, "y_test_true.npy"), y_test)

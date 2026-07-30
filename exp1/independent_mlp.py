@@ -14,7 +14,8 @@ from joblib import Parallel, delayed
 # --- Patched Configuration ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "independent_mlp_artifacts"
+# OUTPUT_DIR = "independent_mlp_artifacts"
+OUTPUT_DIR = "negbio_independent_mlp_artifacts"
 NUM_GPUS = 4
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
@@ -174,9 +175,13 @@ def main():
     val_mask = valid_mask & (df["split"] == "validate") 
     test_mask = valid_mask & (df["split"] == "test")
 
-    y_train = process_labels(df.loc[train_mask, "CheXpert_labels"].values)
-    y_val = process_labels(df.loc[val_mask, "CheXpert_labels"].values)
-    y_test = process_labels(df.loc[test_mask, "CheXpert_labels"].values)
+    # y_train = process_labels(df.loc[train_mask, "CheXpert_labels"].values)
+    # y_val = process_labels(df.loc[val_mask, "CheXpert_labels"].values)
+    # y_test = process_labels(df.loc[test_mask, "CheXpert_labels"].values)
+
+    y_train = process_labels(df.loc[train_mask, "NegBio_labels"].values)
+    y_val = process_labels(df.loc[val_mask, "NegBio_labels"].values)
+    y_test = process_labels(df.loc[test_mask, "NegBio_labels"].values)
 
     np.save(os.path.join(OUTPUT_DIR, "y_val_true.npy"), y_val)
     np.save(os.path.join(OUTPUT_DIR, "y_test_true.npy"), y_test)

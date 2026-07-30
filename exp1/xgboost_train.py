@@ -12,7 +12,8 @@ from joblib import Parallel, delayed
 # --- Configuration & Constants ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "xgboost_evaluation_artifacts"
+# OUTPUT_DIR = "xgboost_evaluation_artifacts"
+OUTPUT_DIR = "negbio_xgboost_evaluation_artifacts"
 NUM_GPUS = 4  # Matches your 4x A6000 setup
 
 # Early Fusion is excluded per your experimental design
@@ -122,10 +123,14 @@ def main():
     val_mask = base_mask & (df["split"].isin(["val", "valid", "validate"]))
     test_mask = base_mask & (df["split"] == "test")
 
-    # Labels
-    y_train = process_labels(df.loc[train_mask, "CheXpert_labels"])
-    y_val = process_labels(df.loc[val_mask, "CheXpert_labels"])
-    y_test = process_labels(df.loc[test_mask, "CheXpert_labels"])
+    # labels
+    # y_train = process_labels(df.loc[train_mask, "CheXpert_labels"].values)
+    # y_val = process_labels(df.loc[val_mask, "CheXpert_labels"].values)
+    # y_test = process_labels(df.loc[test_mask, "CheXpert_labels"].values)
+
+    y_train = process_labels(df.loc[train_mask, "NegBio_labels"].values)
+    y_val = process_labels(df.loc[val_mask, "NegBio_labels"].values)
+    y_test = process_labels(df.loc[test_mask, "NegBio_labels"].values)
 
     np.save(os.path.join(OUTPUT_DIR, "y_val_true.npy"), y_val)
     np.save(os.path.join(OUTPUT_DIR, "y_test_true.npy"), y_test)

@@ -13,3 +13,6 @@ mlp_grid_artifacts/
 Disease-wise MLP:
 independent_mlp.py
 indepdent_mlp_artifacts/
+
+Memo:
+Re-run with NegBio labels for all
