@@ -14,7 +14,8 @@ from joblib import Parallel, delayed
 # --- Configuration ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "independent_4class_artifacts"
+# OUTPUT_DIR = "independent_4class_artifacts"
+OUTPUT_DIR = "negbio_independent_4class_artifacts"
 NUM_GPUS = 4
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
@@ -141,9 +142,13 @@ def main():
     val_mask = valid_mask & (df["split"] == "validate") 
     test_mask = valid_mask & (df["split"] == "test")
 
-    y_train = process_4class_labels(df.loc[train_mask, "CheXpert_labels"].values)
-    y_val = process_4class_labels(df.loc[val_mask, "CheXpert_labels"].values)
-    y_test = process_4class_labels(df.loc[test_mask, "CheXpert_labels"].values)
+    y_train = process_4class_labels(df.loc[train_mask, "NegBio_labels"].values)
+    y_val = process_4class_labels(df.loc[val_mask, "NegBio_labels"].values)
+    y_test = process_4class_labels(df.loc[test_mask, "NegBio_labels"].values)
+
+    # y_train = process_4class_labels(df.loc[train_mask, "CheXpert_labels"].values)
+    # y_val = process_4class_labels(df.loc[val_mask, "CheXpert_labels"].values)
+    # y_test = process_4class_labels(df.loc[test_mask, "CheXpert_labels"].values)
 
     grid = [{"alpha": a, "dropout": d} for a in ALPHAS for d in DROPOUTS]
 

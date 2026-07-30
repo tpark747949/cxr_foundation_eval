@@ -12,7 +12,8 @@ from sklearn.preprocessing import StandardScaler
 # --- Configuration ---
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG"
-OUTPUT_DIR = "shared_4class_artifacts"
+# OUTPUT_DIR = "shared_4class_artifacts"
+OUTPUT_DIR = "negbio_shared_4class_artifacts"
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
 CHEXPERT_DISEASES = [
@@ -87,9 +88,13 @@ def main():
     val_mask = valid_mask & (df["split"] == "validate") 
     test_mask = valid_mask & (df["split"] == "test")
 
-    y_train = process_4class_labels(df.loc[train_mask, "CheXpert_labels"].values)
-    y_val = process_4class_labels(df.loc[val_mask, "CheXpert_labels"].values)
-    y_test = process_4class_labels(df.loc[test_mask, "CheXpert_labels"].values)
+    y_train = process_4class_labels(df.loc[train_mask, "NegBio_labels"].values)
+    y_val = process_4class_labels(df.loc[val_mask, "NegBio_labels"].values)
+    y_test = process_4class_labels(df.loc[test_mask, "NegBio_labels"].values)
+
+    # y_train = process_4class_labels(df.loc[train_mask, "CheXpert_labels"].values)
+    # y_val = process_4class_labels(df.loc[val_mask, "CheXpert_labels"].values)
+    # y_test = process_4class_labels(df.loc[test_mask, "CheXpert_labels"].values)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
