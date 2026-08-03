@@ -13,7 +13,7 @@ from joblib import Parallel, delayed
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "sampled_embeddings_MIMIC-CXR-JPG"
 # OUTPUT_DIR = "xgboost_evaluation_artifacts"
-OUTPUT_DIR = "../../artifacts/10p/extreme_gradient_boost"
+OUTPUT_DIR = "artifacts/10p/extreme_gradient_boost"
 NUM_GPUS = 4  # Matches your 4x A6000 setup
 
 # Early Fusion is excluded per your experimental design
@@ -118,9 +118,9 @@ def main():
     valid_data_mask = (df["ignore"] != 1)
     view_data_mask = (df["ViewCodeSequence_CodeMeaning"] == "postero-anterior")
     sample_mask = (df["sample_10_percent"] == 1)
-    base_mask = valid_data_mask & view_data_mask & sample_mask
+    base_mask = valid_data_mask & view_data_mask
 
-    train_mask = base_mask & (df["split"] == "train")
+    train_mask = base_mask & (df["split"] == "train") & sample_mask
     val_mask = base_mask & (df["split"].isin(["val", "valid", "validate"]))
     test_mask = base_mask & (df["split"] == "test")
 

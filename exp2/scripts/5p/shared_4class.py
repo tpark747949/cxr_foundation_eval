@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "sampled_embeddings_MIMIC-CXR-JPG"
 # OUTPUT_DIR = "shared_4class_artifacts"
-OUTPUT_DIR = "../../artifacts/5p/shared_4class_mlp"
+OUTPUT_DIR = "artifacts/5p/shared_4class_mlp"
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
 CHEXPERT_DISEASES = [
@@ -87,9 +87,9 @@ def main():
     valid_data_mask = (df["ignore"] != 1)
     view_data_mask = (df["ViewCodeSequence_CodeMeaning"] == "postero-anterior")
     sample_mask = (df["sample_5_percent"] == 1)
-    base_mask = valid_data_mask & view_data_mask & sample_mask
+    base_mask = valid_data_mask & view_data_mask
 
-    train_mask = base_mask & (df["split"] == "train")
+    train_mask = base_mask & (df["split"] == "train") & sample_mask
     val_mask = base_mask & (df["split"].isin(["val", "valid", "validate"]))
     test_mask = base_mask & (df["split"] == "test")
 

@@ -6,7 +6,7 @@ def main():
     print("Hello from exp2!")
     scripts = []
     for p in ["1p/", "5p/", "10p/"]:
-        path = "artifacts/" + p
+        path = "scripts/" + p
         for s in ["gpu_fit_models.py", "xgboost_train.py", "mlp_train.py", "independent_mlp.py", "shared_4class.py", "independent_4class.py"]:
             scripts.append(path + s)
 

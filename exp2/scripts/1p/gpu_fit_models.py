@@ -16,7 +16,7 @@ from sklearn.decomposition import PCA
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "sampled_embeddings_MIMIC-CXR-JPG"
 #OUTPUT_DIR = "torch_lr_artifacts"
-OUTPUT_DIR = "../../artifacts/1p/logistic_regression"
+OUTPUT_DIR = "artifacts/1p/logistic_regression"
 
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation"]
@@ -181,9 +181,9 @@ def main():
     valid_data_mask = (df["ignore"] != 1)
     view_data_mask = (df["ViewCodeSequence_CodeMeaning"] == "postero-anterior")
     sample_mask = (df["sample_1_percent"] == 1)
-    base_mask = valid_data_mask & view_data_mask & sample_mask
+    base_mask = valid_data_mask & view_data_mask
 
-    train_mask = base_mask & (df["split"] == "train")
+    train_mask = base_mask & (df["split"] == "train") & sample_mask
     val_mask = base_mask & (df["split"].isin(["val", "valid", "validate"]))
     test_mask = base_mask & (df["split"] == "test")
 

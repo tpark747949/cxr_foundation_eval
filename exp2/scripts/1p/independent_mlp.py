@@ -15,7 +15,7 @@ from joblib import Parallel, delayed
 DB_URI = "../embeddings/MIMIC-CXR-JPG"
 TABLE_NAME = "sampled_embeddings_MIMIC-CXR-JPG"
 # OUTPUT_DIR = "independent_mlp_artifacts"
-OUTPUT_DIR = "../../artifacts/1p/independent_binary_mlp"
+OUTPUT_DIR = "artifacts/1p/independent_binary_mlp"
 NUM_GPUS = 4
 
 MODELS = ["MedSigLIP", "BioViL-T", "EVA-X", "CheXFound", "CheXagent", "CXR_Foundation", "Early_Fusion"]
@@ -66,6 +66,10 @@ class EarlyStopping:
         self.best_score = -np.inf
 
     def __call__(self, current_score):
+        # Prevent NaN from breaking the comparison logic
+        if np.isnan(current_score):
+            current_score = 0.5
+            
         if current_score >= self.best_score + self.min_delta:
             self.best_score = current_score
             self.counter = 0
@@ -137,6 +141,12 @@ def train_single_trial(task_idx, disease_idx, config, X_tr, y_tr_1d, X_v, y_v_1d
         
         if is_best:
             best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+        # --- FAILSAFE ---
+        # If early stopping failed to trigger even once (e.g., immediate NaN collapse),
+        # just grab the weights from the final epoch so the script doesn't crash.
+        if best_weights is None:
+            best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
             
         if stop:
             break
@@ -172,9 +182,11 @@ def main():
     valid_data_mask = (df["ignore"] != 1)
     view_data_mask = (df["ViewCodeSequence_CodeMeaning"] == "postero-anterior")
     sample_mask = (df["sample_1_percent"] == 1)
-    base_mask = valid_data_mask & view_data_mask & sample_mask
+    # Base mask DOES NOT include the sample restriction
+    base_mask = valid_data_mask & view_data_mask
 
-    train_mask = base_mask & (df["split"] == "train")
+    # Apply the 1% sample ONLY to the training data
+    train_mask = base_mask & (df["split"] == "train") & (df["sample_1_percent"] == 1)
     val_mask = base_mask & (df["split"].isin(["val", "valid", "validate"]))
     test_mask = base_mask & (df["split"] == "test")
 
