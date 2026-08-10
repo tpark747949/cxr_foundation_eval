@@ -1,125 +1,85 @@
-# dashboard.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="CXR Foundation Evaluation Dashboard", layout="wide")
-
-st.title("CXR Foundation Models: Evaluation & Sensitivity Dashboard")
+st.set_page_config(layout="wide", page_title="CXR Foundation Eval")
 
 @st.cache_data
 def load_data():
-    df1 = pd.read_csv("exp1_master_results.csv")
-    df2 = pd.read_csv("exp2_master_results.csv")
-    return df1, df2
+    return pd.read_csv("master_metrics.csv")
 
-try:
-    df_exp1, df_exp2 = load_data()
-except Exception as e:
-    st.error("Please run `python generate_master_csvs.py` first to create the summary CSV files.")
-    st.stop()
+df = load_data()
 
-tab1, tab2, tab3 = st.tabs([
-    "Exp 1: Sensitivity & Labeler Comparison", 
-    "Exp 2: Label Efficiency Curves", 
-    "Disease Granularity Matrix"
+st.title("CXR Foundation Models: Deep Exploration")
+
+# --- Global Sidebar Filters ---
+st.sidebar.header("Global Filters")
+selected_models = st.sidebar.multiselect("Models", df["Model"].unique(), default=df["Model"].unique())
+selected_heads = st.sidebar.multiselect("Classifier Heads", df["Head"].unique(), default=["LR", "XGB"])
+selected_vars = st.sidebar.multiselect("Embeddings (Var)", df["Var"].unique(), default=["raw"])
+selected_diseases = st.sidebar.multiselect("Diseases", df["Disease"].unique(), default=df["Disease"].unique())
+
+filtered_df = df[
+    (df["Model"].isin(selected_models)) & 
+    (df["Head"].isin(selected_heads)) & 
+    (df["Var"].isin(selected_vars)) & 
+    (df["Disease"].isin(selected_diseases))
+]
+
+# --- Tabbed Interface ---
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Data Scarcity (Exp 2)", 
+    "Head Architecture (Exp 1)", 
+    "Per-Disease Heatmap", 
+    "Raw Data Explorer"
 ])
 
-# --- TAB 1: EXP 1 ---
 with tab1:
-    st.header("Experiment 1: CheXpert vs NegBio Sensitivity")
+    st.subheader("Label Efficiency: How much data do these models really need?")
+    st.markdown("Watch how complex heads (MLPs) collapse at 1% data, while simple heads (LR) survive.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        selected_artifact = st.selectbox(
-            "Select Architecture Group", 
-            options=df_exp1["Artifact_Group"].unique()
-        )
-    with col2:
-        agg_metric = st.selectbox("Aggregation Level", ["Macro Mean", "Per-Disease"])
-
-    filtered_exp1 = df_exp1[df_exp1["Artifact_Group"] == selected_artifact]
+    eff_df = filtered_df[filtered_df["Label"].isin(["1pct", "5pct", "10pct", "CheXpert"])].copy()
+    pct_map = {"1pct": 1, "5pct": 5, "10pct": 10, "CheXpert": 100}
+    eff_df["Data_Pct"] = eff_df["Label"].map(pct_map)
     
-    if agg_metric == "Macro Mean":
-        macro_df = filtered_exp1.groupby(["Model", "Label_Source"])["AUC"].mean().reset_index()
-        fig = px.bar(
-            macro_df, 
-            x="Model", 
-            y="AUC", 
-            color="Label_Source", 
-            barmode="group",
-            text_auto=".3f",
-            title=f"Macro AUROC: CheXpert vs NegBio ({selected_artifact})"
-        )
-        fig.update_layout(yaxis_range=[0.5, 1.0])
-        st.plotly_chart(fig, use_container_width=True)
+    # Toggle to separate or average heads
+    separate_heads = st.checkbox("Plot separate lines for each Classifier Head", value=True)
+    
+    if separate_heads:
+        # Create a combined column for the legend
+        eff_df["Model + Head"] = eff_df["Model"] + " (" + eff_df["Head"] + ")"
+        mean_eff = eff_df.groupby(["Model + Head", "Model", "Head", "Data_Pct"])["AUC"].mean().reset_index()
+        fig1 = px.line(mean_eff, x="Data_Pct", y="AUC", color="Model", line_dash="Head", markers=True, log_x=True,
+                       hover_name="Model + Head", labels={"Data_Pct": "Training Data Percentage", "AUC": "Macro Mean AUROC"})
     else:
-        disease_df = filtered_exp1.groupby(["Model", "Label_Source", "Disease"])["AUC"].mean().reset_index()
-        selected_disease = st.selectbox("Select Pathology", options=df_exp1["Disease"].unique())
-        sub_d = disease_df[disease_df["Disease"] == selected_disease]
-        fig = px.bar(
-            sub_d, 
-            x="Model", 
-            y="AUC", 
-            color="Label_Source", 
-            barmode="group",
-            text_auto=".3f",
-            title=f"{selected_disease} AUROC: CheXpert vs NegBio"
-        )
-        fig.update_layout(yaxis_range=[0.5, 1.0])
-        st.plotly_chart(fig, use_container_width=True)
+        mean_eff = eff_df.groupby(["Model", "Data_Pct"])["AUC"].mean().reset_index()
+        fig1 = px.line(mean_eff, x="Data_Pct", y="AUC", color="Model", markers=True, log_x=True,
+                       labels={"Data_Pct": "Training Data Percentage", "AUC": "Macro Mean AUROC (Averaged across selected heads)"})
+        
+    st.plotly_chart(fig1, use_container_width=True)
 
-# --- TAB 2: EXP 2 ---
 with tab2:
-    st.header("Experiment 2: Label Efficiency (1% vs 5% vs 10%)")
+    st.subheader("Linear Separability: The Delta Between Simple and Complex Heads")
+    st.markdown("A good foundation model should achieve high performance with just Logistic Regression.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        selected_classifier = st.selectbox("Select Classifier", options=df_exp2["Classifier"].unique())
+    # Isolate 100% data
+    head_df = filtered_df[filtered_df["Label"] == "CheXpert"]
     
-    filtered_exp2 = df_exp2[df_exp2["Classifier"] == selected_classifier]
-    
-    # Map percentage strings to numeric values for clean plotting
-    pct_map = {"1p": 1, "5p": 5, "10p": 10}
-    filtered_exp2["Pct_Num"] = filtered_exp2["Sample_Pct"].map(pct_map)
-    
-    curve_df = filtered_exp2.groupby(["Model", "Pct_Num"])["AUC"].mean().reset_index()
-    
-    fig = px.line(
-        curve_df, 
-        x="Pct_Num", 
-        y="AUC", 
-        color="Model", 
-        markers=True,
-        labels={"Pct_Num": "Training Data Percentage (%)", "AUC": "Macro Mean AUROC"},
-        title=f"Label Efficiency Scaling Curves ({selected_classifier})"
-    )
-    fig.update_layout(xaxis=dict(tickvals=[1, 5, 10]), yaxis_range=[0.5, 1.0])
-    st.plotly_chart(fig, use_container_width=True)
+    fig2 = px.box(head_df, x="Model", y="AUC", color="Head", points="all",
+                  category_orders={"Head": ["LR", "XGB", "s2", "i2", "s4", "i4"]})
+    st.plotly_chart(fig2, use_container_width=True)
 
-# --- TAB 3: HEATMAP ---
 with tab3:
-    st.header("Disease Granularity Heatmap")
+    st.subheader("Disease Fingerprints: Who is good at what?")
     
-    exp_choice = st.radio("Choose Experiment Source", ["Exp 1", "Exp 2"])
+    heat_df = filtered_df[filtered_df["Label"] == "CheXpert"]
+    # Group by Model and Disease, averaging whatever heads/vars are left in the global filter
+    heat_pivot = heat_df.groupby(["Model", "Disease"])["AUC"].mean().unstack()
     
-    if exp_choice == "Exp 1":
-        source_df = df_exp1
-        sub_filter = st.selectbox("Artifact Group", options=source_df["Artifact_Group"].unique())
-        matrix_df = source_df[source_df["Artifact_Group"] == sub_filter]
-        pivot_df = matrix_df.pivot_table(index="Disease", columns="Model", values="AUC", aggfunc="mean")
-    else:
-        source_df = df_exp2
-        sub_pct = st.selectbox("Sample Percentage", options=source_df["Sample_Pct"].unique())
-        sub_cls = st.selectbox("Classifier Architecture", options=source_df["Classifier"].unique())
-        matrix_df = source_df[(source_df["Sample_Pct"] == sub_pct) & (source_df["Classifier"] == sub_cls)]
-        pivot_df = matrix_df.pivot_table(index="Disease", columns="Model", values="AUC", aggfunc="mean")
+    fig3 = px.imshow(heat_pivot, text_auto=".3f", aspect="auto", color_continuous_scale="Viridis",
+                     labels={"color": "Mean AUROC"})
+    st.plotly_chart(fig3, use_container_width=True)
 
-    fig = px.imshow(
-        pivot_df, 
-        text_auto=".2f", 
-        color_continuous_scale="Viridis",
-        aspect="auto",
-        title="Disease-Level Performance Matrix"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+with tab4:
+    st.subheader("Raw Data View")
+    st.dataframe(filtered_df.sort_values(by="AUC", ascending=False), use_container_width=True)
