@@ -1,23 +1,28 @@
-from transformers import AutoProcessor, AutoModel
-import torch
-import torch.nn.functional as F
+import tensorflow as tf
+import tensorflow_hub as tf_hub
 import numpy as np
 import lancedb
 import pyarrow as pa
 import re
 from pathlib import Path
+import tensorflow_text as tf_text
+
+# Force TensorFlow to use CPU only
+tf.config.set_visible_devices([], 'GPU')
 
 REPORTS_PATH = "../../data/MIMIC-CXR"
 URI2 = "../../embeddings/MIMIC-CXR-JPG"
 URI = "../../embeddings/reports"
-TABLE_NAME = "MedSigLIP"
+TABLE_NAME = "CXR_Foundation"
 
-# Removed the 'disease' column
+# IMPORTANT: Update '1024' to match ELIXR's output dimension (e.g., 128 or 768)
+EMBEDDING_DIM = 128 
+
 SCHEMA = pa.schema([
     pa.field("study_id", pa.uint32()),   
     pa.field("subject_id", pa.uint32()),
-    pa.field("findings_embedding", pa.list_(pa.float32(), 1152)),
-    pa.field("impression_embedding", pa.list_(pa.float32(), 1152)),
+    pa.field("findings_embedding", pa.list_(pa.float32(), EMBEDDING_DIM)),
+    pa.field("impression_embedding", pa.list_(pa.float32(), EMBEDDING_DIM)),
 ])
 
 def extract_sections(report_text):
@@ -98,32 +103,56 @@ for path in all_files:
 
 print(f"Found {len(reports)} reports to process.")
 
-# Removed device_map="auto" to ensure it loads on CPU
-text_model = AutoModel.from_pretrained("google/medsiglip-448")
-processor = AutoProcessor.from_pretrained("google/medsiglip-448")
+# --- TENSORFLOW ELIXR INFERENCE SETUP ---
+print("Loading TF Hub Preprocessor and ELIXR Model...")
+preprocessor = tf_hub.KerasLayer("https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3")
+qformer_model = tf.saved_model.load("./checkpoints/hf/pax-elixr-b-text")
 
-processor.tokenizer.truncation_side = "left"
+def bert_tokenize(text):
+    """Tokenizes input text and returns token IDs and padding masks."""
+    out = preprocessor(tf.constant([text.lower()]))
+    ids = out['input_word_ids'].numpy().astype(np.int32)
+    masks = out['input_mask'].numpy().astype(np.float32)
+    
+    paddings = 1.0 - masks
+    end_token_idx = ids == 102
+    ids[end_token_idx] = 0
+    paddings[end_token_idx] = 1.0
+    
+    ids = np.expand_dims(ids, axis=1)
+    paddings = np.expand_dims(paddings, axis=1)
+    return ids, paddings
 
-# Feed a blank space " " to the tokenizer if a section is missing so it doesn't crash
+def get_elixr_embeddings(text_list):
+    """Helper function to loop through texts and extract normalized ELIXR embeddings."""
+    embeddings = []
+    for text in text_list:
+        tokens, paddings = bert_tokenize(text)
+        
+        qformer_input = {
+            'image_feature': np.zeros([1, 8, 8, 1376], dtype=np.float32).tolist(),
+            'ids': tokens.tolist(),
+            'paddings': paddings.tolist(),
+        }
+        
+        qformer_output = qformer_model.signatures['serving_default'](**qformer_input)
+        emb = qformer_output['contrastive_txt_emb'].numpy()[0]
+        
+        # L2 Normalize the embedding (standard practice for contrastive models)
+        emb = emb / np.linalg.norm(emb, axis=-1, keepdims=True)
+        embeddings.append(emb.tolist())
+        
+    return embeddings
+
+# Pass a dummy blank string " " to the tokenizer if a section is missing so it doesn't crash
 findings_texts = [r["findings"] if r["findings"] else " " for r in reports]
 impression_texts = [r["impression"] if r["impression"] else " " for r in reports]
 
-text_model.eval()
-
 print("Generating Findings embeddings...")
-with torch.no_grad():
-    inputs_f = processor(text=findings_texts, padding=True, truncation=True, return_tensors="pt")
-    # get_text_features returns a tensor, not a dictionary, so we normalize it directly
-    out_f = text_model.get_text_features(**inputs_f)
-    out_f = out_f["pooler_output"] / out_f["pooler_output"].norm(p=2, dim=-1, keepdim=True)
-    f_embeddings_np = out_f.numpy().tolist()
+f_embeddings_np = get_elixr_embeddings(findings_texts)
 
 print("Generating Impression embeddings...")
-with torch.no_grad():
-    inputs_i = processor(text=impression_texts, padding=True, truncation=True, return_tensors="pt")
-    out_i = text_model.get_text_features(**inputs_i)
-    out_i = out_i["pooler_output"] / out_i["pooler_output"].norm(p=2, dim=-1, keepdim=True)
-    i_embeddings_np = out_i.numpy().tolist()
+i_embeddings_np = get_elixr_embeddings(impression_texts)
 
 print("Connecting to LanceDB...")
 db = lancedb.connect(URI)
@@ -134,6 +163,7 @@ for idx, r in enumerate(reports):
     record = {
         "study_id": r["study"],
         "subject_id": r["patient"],
+        # Insert actual embedding if text exists, otherwise None
         "findings_embedding": f_embeddings_np[idx] if r["findings"] else None,
         "impression_embedding": i_embeddings_np[idx] if r["impression"] else None
     }

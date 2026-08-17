@@ -1,37 +1,78 @@
 from transformers import AutoProcessor, AutoModelForZeroShotImageClassification
 import torch
+import torch.nn.functional as F
 import numpy as np
 import lancedb
 import pyarrow as pa
-
-import os
-import shutil
+import re
 from pathlib import Path
 
 REPORTS_PATH = "../../data/MIMIC-CXR"
-
 URI2 = "../../embeddings/MIMIC-CXR-JPG"
-
 URI = "../../embeddings/reports"
 TABLE_NAME = "CheXagent"
+
+# Removed the 'disease' column
 SCHEMA = pa.schema([
-    pa.field("disease", pa.string()),
     pa.field("study_id", pa.uint32()),   
     pa.field("subject_id", pa.uint32()),
-    pa.field("embedding", pa.list_(pa.float32(), 1024)),
+    pa.field("findings_embedding", pa.list_(pa.float32(), 1024)),
+    pa.field("impression_embedding", pa.list_(pa.float32(), 1024)),
 ])
-# this should be like each row is a disease, and the columns are the embeddings for the positive and negative phrases from each model
+
+def extract_sections(report_text):
+    """
+    Parses a MIMIC-CXR report and groups inconsistent headers into standard 
+    'findings' and 'impression' blocks.
+    """
+    extracted = {"findings": "", "impression": ""}
+    
+    heading_pattern = re.compile(r'^\s*([A-Z][A-Z0-9\s,\/\-]*?):', re.MULTILINE)
+    matches = list(heading_pattern.finditer(report_text))
+    
+    if not matches:
+        return extracted
+
+    sections = {}
+    for i, match in enumerate(matches):
+        heading = match.group(1).strip()
+        start = match.end()
+        end = matches[i+1].start() if i + 1 < len(matches) else len(report_text)
+        sections[heading] = report_text[start:end].strip()
+
+    findings_headings = [
+        "FINDINGS", "PA AND LATERAL VIEWS OF THE CHEST", "CHEST", 
+        "FRONTAL AND LATERAL VIEWS OF THE CHEST", "CT CHEST", 
+        "EXAMINATION", "PORTABLE RADIOGRAPH OF THE CHEST"
+    ]
+    impression_headings = ["IMPRESSION", "IMPRESSIONS", "CONCLUSION", "CONCLUSIONS", "SUMMARY"]
+
+    findings_texts = []
+    impression_texts = []
+
+    for heading, content in sections.items():
+        heading_upper = heading.upper()
+        if any(h == heading_upper for h in impression_headings) or "IMPRESSION" in heading_upper:
+            impression_texts.append(content)
+        elif any(h == heading_upper for h in findings_headings) or "FINDINGS" in heading_upper or "VIEWS" in heading_upper:
+            findings_texts.append(content)
+
+    if findings_texts:
+        extracted["findings"] = " ".join(findings_texts)
+    if impression_texts:
+        extracted["impression"] = " ".join(impression_texts)
+
+    return extracted
+
 
 print("Connecting to reference LanceDB...")
 db2 = lancedb.connect(URI2)
 table2 = db2.open_table("complete_embeddings_MIMIC-CXR-JPG")
 df_filtered = table2.search().where("split = 'test'").to_pandas()
-subject_list = df_filtered["subject_id"].unique().tolist()
-study_list = df_filtered["study_id"].unique().tolist()
-
+subject_list = set(df_filtered["subject_id"].unique().tolist())
+study_list = set(df_filtered["study_id"].unique().tolist())
 
 print("Scanning report directory...")
-
 all_files = list(Path(REPORTS_PATH).resolve().rglob("*.txt"))
 
 reports = []
@@ -44,47 +85,59 @@ for path in all_files:
         continue
 
     with open(path, "r") as f:
-        lines = [line.strip() for line in f if line.strip()]
+        full_text = f.read()
 
-    cleaned_text = "\n".join(lines)
-    report = [patient, study, cleaned_text]
-    reports.append(report)
+    sections = extract_sections(full_text)
+    
+    reports.append({
+        "patient": patient,
+        "study": study,
+        "findings": sections["findings"],
+        "impression": sections["impression"]
+    })
 
-print(f"Found {len(reports)} reports.")
+print(f"Found {len(reports)} reports to process.")
 
-
-text_model = AutoModelForZeroShotImageClassification.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli", device_map="auto")
+# Removed device_map="auto" to ensure it loads on CPU
+text_model = AutoModelForZeroShotImageClassification.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli")
 processor = AutoProcessor.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli")
-
-texts = []
-for _, _, text in reports:
-    texts.append(text)
-
 processor.tokenizer.truncation_side = "left"
-inputs = processor(text=texts, padding=True, truncation=True, return_tensors="pt")
 
+# Feed a blank space " " to the tokenizer if a section is missing so it doesn't crash
+findings_texts = [r["findings"] if r["findings"] else " " for r in reports]
+impression_texts = [r["impression"] if r["impression"] else " " for r in reports]
+
+text_model.eval()
+
+print("Generating Findings embeddings...")
 with torch.no_grad():
-    outputs = text_model.get_text_features(**inputs)
+    inputs_f = processor(text=findings_texts, padding=True, truncation=True, return_tensors="pt")
+    # get_text_features returns a tensor, not a dictionary, so we normalize it directly
+    out_f = text_model.get_text_features(**inputs_f)
+    out_f = out_f["pooler_output"] / out_f["pooler_output"].norm(p=2, dim=-1, keepdim=True)
+    f_embeddings_np = out_f.numpy().tolist()
 
-output_embeddings = outputs["pooler_output"] / outputs["pooler_output"].norm(p=2, dim=-1, keepdim=True)
-
-print(output_embeddings.shape)
+print("Generating Impression embeddings...")
+with torch.no_grad():
+    inputs_i = processor(text=impression_texts, padding=True, truncation=True, return_tensors="pt")
+    out_i = text_model.get_text_features(**inputs_i)
+    out_i = out_i["pooler_output"] / out_i["pooler_output"].norm(p=2, dim=-1, keepdim=True)
+    i_embeddings_np = out_i.numpy().tolist()
 
 print("Connecting to LanceDB...")
 db = lancedb.connect(URI)
 table = db.create_table(TABLE_NAME, schema=SCHEMA, mode="overwrite")
 
-i = 0
 records = []
-for patient, study, text in reports:
-    embedding = output_embeddings[i].cpu().numpy().tolist()
+for idx, r in enumerate(reports):
     record = {
-        "study_id": study,
-        "subject_id": patient,
-        "embedding": embedding
+        "study_id": r["study"],
+        "subject_id": r["patient"],
+        "findings_embedding": f_embeddings_np[idx] if r["findings"] else None,
+        "impression_embedding": i_embeddings_np[idx] if r["impression"] else None
     }
     records.append(record)
-    i += 1
 
 print(f"Writing {len(records)} records to LanceDB...")
 table.add(records)
+print("Done!")

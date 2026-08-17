@@ -10,14 +10,14 @@ from pathlib import Path
 REPORTS_PATH = "../../data/MIMIC-CXR"
 URI2 = "../../embeddings/MIMIC-CXR-JPG"
 URI = "../../embeddings/reports"
-TABLE_NAME = "MedSigLIP"
+TABLE_NAME = "BioViL-T"
 
 # Removed the 'disease' column
 SCHEMA = pa.schema([
     pa.field("study_id", pa.uint32()),   
     pa.field("subject_id", pa.uint32()),
-    pa.field("findings_embedding", pa.list_(pa.float32(), 1152)),
-    pa.field("impression_embedding", pa.list_(pa.float32(), 1152)),
+    pa.field("findings_embedding", pa.list_(pa.float32(), 128)),
+    pa.field("impression_embedding", pa.list_(pa.float32(), 128)),
 ])
 
 def extract_sections(report_text):
@@ -99,30 +99,29 @@ for path in all_files:
 print(f"Found {len(reports)} reports to process.")
 
 # Removed device_map="auto" to ensure it loads on CPU
-text_model = AutoModel.from_pretrained("google/medsiglip-448")
-processor = AutoProcessor.from_pretrained("google/medsiglip-448")
+from health_multimodal.text import get_bert_inference
+from health_multimodal.text.utils import BertEncoderType
 
-processor.tokenizer.truncation_side = "left"
+text_model = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
 
 # Feed a blank space " " to the tokenizer if a section is missing so it doesn't crash
 findings_texts = [r["findings"] if r["findings"] else " " for r in reports]
 impression_texts = [r["impression"] if r["impression"] else " " for r in reports]
 
-text_model.eval()
 
 print("Generating Findings embeddings...")
 with torch.no_grad():
-    inputs_f = processor(text=findings_texts, padding=True, truncation=True, return_tensors="pt")
+    inputs_f = findings_texts
     # get_text_features returns a tensor, not a dictionary, so we normalize it directly
-    out_f = text_model.get_text_features(**inputs_f)
-    out_f = out_f["pooler_output"] / out_f["pooler_output"].norm(p=2, dim=-1, keepdim=True)
+    out_f = text_model.get_embeddings_from_prompt(inputs_f)
+    out_f = out_f / out_f.norm(p=2, dim=-1, keepdim=True)
     f_embeddings_np = out_f.numpy().tolist()
 
 print("Generating Impression embeddings...")
 with torch.no_grad():
-    inputs_i = processor(text=impression_texts, padding=True, truncation=True, return_tensors="pt")
-    out_i = text_model.get_text_features(**inputs_i)
-    out_i = out_i["pooler_output"] / out_i["pooler_output"].norm(p=2, dim=-1, keepdim=True)
+    inputs_i = impression_texts
+    out_i = text_model.get_embeddings_from_prompt(inputs_i)
+    out_i = out_i / out_i.norm(p=2, dim=-1, keepdim=True)
     i_embeddings_np = out_i.numpy().tolist()
 
 print("Connecting to LanceDB...")
