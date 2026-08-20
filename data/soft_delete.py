@@ -8,7 +8,7 @@ import pyarrow.compute as pc
 # ==========================================
 TXT_FILE = os.path.expanduser("~/cxr_foundation_eval/data/mimic_exclude_list.txt")
 LANCEDB_URI = os.path.expanduser("~/cxr_foundation_eval/embeddings/MIMIC-CXR-JPG")
-TABLE_NAME = "complete_embeddings_MIMIC-CXR-JPG" # Update if your table name differs
+TABLE_NAME = "fixed_embeddings_MIMIC-CXR-JPG" # Update if your table name differs
 
 def flag_ignored_images():
     # 1. Read the DICOM IDs from the text file

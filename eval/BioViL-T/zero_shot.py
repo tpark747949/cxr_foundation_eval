@@ -37,8 +37,12 @@ text_model = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
 texts = []
 for disease in DISEASES:
     disease = disease.lower()
-    pos_phrase = f"{disease} is present"
-    neg_phrase = f"no {disease}"
+    # Distinct positive phrase
+    pos_phrase = f"radiographic findings consistent with {disease}"
+    
+    # Universal negative phrase (NO lexical overlap with the disease)
+    neg_phrase = "normal chest x-ray, clear lungs, no abnormalities"
+    
     texts.append(pos_phrase)
     texts.append(neg_phrase)
 print("Number of phrases:", len(texts))

@@ -11,7 +11,7 @@ def merge_lancedb_partitions():
     master_table = db.open_table(master_table_name)
     
     # Append the remaining partitions (2 and 3)
-    for i in [1]:
+    for i in [2, 3]:
         part_name = f"CheXagent_MIMIC_Part_{i}"
         # ... rest of the merge logic is the same ...
         

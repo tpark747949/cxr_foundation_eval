@@ -4,23 +4,21 @@ import torch
 import lancedb
 import pandas as pd
 import numpy as np
+from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
-from health_multimodal.text import get_bert_inference
-from health_multimodal.text.utils import BertEncoderType
-from health_multimodal.image import get_image_inference
-from health_multimodal.image.utils import ImageModelType
+from transformers import AutoProcessor, AutoModelForZeroShotImageClassification
 
 # --- Configuration ---
 URI_IMAGES = os.path.expanduser("~/cxr_foundation_eval/embeddings/MIMIC-CXR-JPG")
 URI_REPORTS = os.path.expanduser("~/cxr_foundation_eval/embeddings/reports")
-DATA_DIR = os.path.expanduser("~/cxr_foundation_eval/data/MIMIC-CXR-JPG/2.1.0/")
-REPORTS_PATH = os.path.expanduser("~/cxr_foundation_eval/data/MIMIC-CXR")
+REPORTS_PATH = os.path.expanduser("~/cxr_foundation_eval/data/MIMIC-CXR") # Adjust if needed
+CHECKPOINT = "StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli"
+BATCH_SIZE = 32
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# --- Helper: Extract Text Sections ---
 def extract_sections(report_text):
     extracted = {"findings": "", "impression": ""}
     heading_pattern = re.compile(r'^\s*([A-Z][A-Z0-9\s,\/\-]*?):', re.MULTILINE)
@@ -60,47 +58,24 @@ def extract_sections(report_text):
 
     return extracted
 
-
-# --- Load Models ---
-text_inference = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
-text_inference.model = text_inference.model.to(device)
-
-image_inference = get_image_inference(ImageModelType.BIOVIL_T)
-image_inference.model = image_inference.model.to(device)
-
-
-# --- 1. Process Images ---
+# --- 1. Identify Target Studies ---
 db_img = lancedb.connect(URI_IMAGES)
 table_img = db_img.open_table("complete_embeddings_MIMIC-CXR-JPG")
 df_img = table_img.search().where("split = 'test'").to_pandas()
 
-image_paths = [os.path.join(DATA_DIR, path) for path in df_img["path"].tolist()]
-
-img_embeddings = []
-print("Extracting BioViL-T joint image embeddings...")
-for path in tqdm(image_paths):
-    with torch.no_grad():
-        emb = image_inference.get_projected_global_embedding(Path(path))
-        emb = emb / emb.norm(dim=-1, keepdim=True)
-        img_embeddings.append(emb.cpu().numpy().tolist())
-
-df_img["BioViL-T_l2"] = img_embeddings
-db_img.create_table("complete_embeddings_MIMIC-CXR-JPG", df_img, mode="overwrite")
-print("Saved joint image embeddings to LanceDB.")
-
-
-# --- 2. Extract Raw Report Texts ---
 subject_list = set(df_img["subject_id"].unique().tolist())
 study_list = set(df_img["study_id"].unique().tolist())
 
+# --- 2. Parse Raw Texts ---
 print("Scanning report directory...")
 all_files = list(Path(REPORTS_PATH).resolve().rglob("*.txt"))
 
 reports = []
 for path in all_files:
     split_path = path.parts
+    # Adjust indexing [6] and [7] if your path depth differs from the MedSigLIP script!
     try:
-        patient = int("".join(filter(str.isdigit, split_path[-2])))
+        patient = int("".join(filter(str.isdigit, split_path[-2]))) # Safer relative indexing
         study = int("".join(filter(str.isdigit, split_path[-1])))
     except ValueError:
         continue
@@ -121,34 +96,55 @@ for path in all_files:
 
 print(f"Found {len(reports)} reports to process.")
 
+# --- 3. Extract Joint Text Embeddings ---
+processor = AutoProcessor.from_pretrained(CHECKPOINT)
+model = AutoModelForZeroShotImageClassification.from_pretrained(CHECKPOINT).to(device)
+model.eval()
 
-# --- 3. Extract Report Text Embeddings ---
-def extract_biovil_texts(texts):
+# Dummy image to force the joint forward pass
+dummy_image_template = Image.new("RGB", (224, 224))
+
+def extract_text_embeds(texts):
     embeds = []
-    for t in tqdm(texts):
-        # Using a blank space fallback rather than injecting clinical semantics like "Normal chest X-ray"
-        txt_clean = t if isinstance(t, str) and len(t.strip()) > 0 else " "
+    # Feed a blank space " " to the tokenizer if a section is missing so it doesn't crash
+    clean_texts = [t if t and len(t.strip()) > 0 else " " for t in texts]
+    
+    for i in tqdm(range(0, len(clean_texts), BATCH_SIZE)):
+        batch_txt = clean_texts[i:i + BATCH_SIZE]
+        dummy_imgs = [dummy_image_template] * len(batch_txt)
+        
+        inputs = processor(
+            images=dummy_imgs, 
+            text=batch_txt, 
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True
+        ).to(device)
+        
         with torch.no_grad():
-            emb = text_inference.get_embeddings_from_prompt([txt_clean], normalize=True)
-            embeds.append(emb.squeeze(0).cpu().numpy().tolist())
+            outputs = model(**inputs)
+            t_feats = outputs.text_embeds.cpu()
+            # L2 Normalization
+            t_feats = t_feats / t_feats.norm(dim=-1, keepdim=True)
+            embeds.extend(t_feats.numpy().tolist())
+            
     return embeds
 
-print("Extracting BioViL-T joint findings embeddings...")
+print("\nExtracting CheXagent joint findings embeddings...")
 findings_list = [r["findings"] for r in reports]
-findings_embeds = extract_biovil_texts(findings_list)
+findings_embeds = extract_text_embeds(findings_list)
 
-print("Extracting BioViL-T joint impression embeddings...")
+print("\nExtracting CheXagent joint impression embeddings...")
 impression_list = [r["impression"] for r in reports]
-impression_embeds = extract_biovil_texts(impression_list)
+impression_embeds = extract_text_embeds(impression_list)
 
-
-# --- 4. Save Text Embeddings to LanceDB ---
-df_biovil_rpt = pd.DataFrame({
+# --- 4. Save to LanceDB ---
+df_chex_rpt = pd.DataFrame({
     "study_id": [r["study_id"] for r in reports],
     "findings_embedding": findings_embeds,
     "impression_embedding": impression_embeds
 })
 
 db_rpt = lancedb.connect(URI_REPORTS)
-db_rpt.create_table("BioViL-T", df_biovil_rpt, mode="overwrite")
-print("Saved BioViL-T report embeddings to LanceDB.")
+db_rpt.create_table("CheXagent", df_chex_rpt, mode="overwrite")
+print("Successfully overwrote CheXagent report embeddings table!")

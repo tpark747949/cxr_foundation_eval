@@ -1,10 +1,23 @@
+from typing import List
+from typing import Tuple
+from pathlib import Path
+
 import torch
-import numpy as np
+from health_multimodal.common.visualization import plot_phrase_grounding_similarity_map
+from health_multimodal.text import get_bert_inference
+from health_multimodal.text.utils import BertEncoderType
+from health_multimodal.image import get_image_inference
+from health_multimodal.image.utils import ImageModelType
+from health_multimodal.vlp import ImageTextInferenceEngine
+
 import lancedb
 import pyarrow as pa
-import tensorflow as tf
-import tensorflow_text as tf_text
-import tensorflow_hub as tf_hub
+from tqdm import tqdm
+
+REF_URI = "../../embeddings/MIMIC-CXR-JPG"
+URI = "../../embeddings/phrases"
+
+DATA_DIR = "../../data/MIMIC-CXR-JPG/2.1.0/"
 
 DISEASES = [
     "Atelectasis",
@@ -21,23 +34,8 @@ DISEASES = [
     "Pneumothorax",
     "Support Devices",
     "No Finding",]
-URI = "../../embeddings/phrases"
-TABLE_NAME = "CXR_Foundation"
-SCHEMA = pa.schema([
-    pa.field("disease", pa.string()),
-    pa.field("positive_embedding", pa.list_(pa.float32(), 128)),
-    pa.field("negative_embedding", pa.list_(pa.float32(), 128)),
-])
-# this should be like each row is a disease, and the columns are the embeddings for the positive and negative phrases from each model
 
-# Download the model repository files
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="google/cxr-foundation",local_dir='./checkpoints/hf',
-                  allow_patterns=['elixr-c-v2-pooled/*', 'pax-elixr-b-text/*'])
-
-if 'qformer_model' not in locals():
-  qformer_model = tf.saved_model.load("./checkpoints/hf/pax-elixr-b-text")
-
+# Exact 13 CheXpert categories mapped to structurally balanced pairs
 DISEASE_PAIRS = {
     "Atelectasis": [
         "radiographic findings consistent with atelectasis",
@@ -103,59 +101,79 @@ for disease in DISEASES:
     pos_phrase, neg_phrase = DISEASE_PAIRS[disease]
     texts.append(pos_phrase)
     texts.append(neg_phrase)
+
+# Should be 28 phrases long
 print("Number of phrases:", len(texts))
 
-# Helper function for tokenizing text input
-def bert_tokenize(text):
-    """Tokenizes input text and returns token IDs and padding masks."""
-    preprocessor = tf_hub.KerasLayer(
-        "https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3")
-    out = preprocessor(tf.constant([text.lower()]))
-    ids = out['input_word_ids'].numpy().astype(np.int32)
-    masks = out['input_mask'].numpy().astype(np.float32)
-    paddings = 1.0 - masks
-    end_token_idx = ids == 102
-    ids[end_token_idx] = 0
-    paddings[end_token_idx] = 1.0
-    ids = np.expand_dims(ids, axis=1)
-    paddings = np.expand_dims(paddings, axis=1)
-    assert ids.shape == (1, 1, 128)
-    assert paddings.shape == (1, 1, 128)
-    return ids, paddings
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-output_embeddings = []
-for text in texts:
-    tokens, paddings = bert_tokenize(text)
-    qformer_input = {
-        'image_feature': np.zeros([1, 8, 8, 1376], dtype=np.float32).tolist(),
-        'ids': tokens.tolist(),
-        'paddings': paddings.tolist(),
-    }
-    qformer_output = qformer_model.signatures['serving_default'](**qformer_input)
-    text_embeddings = qformer_output['contrastive_txt_emb'].numpy()
-    # h_embeddings = text_embeddings.flatten().numpy()
-    output_embeddings.append(text_embeddings[0])
-    print(text_embeddings[0].shape)
-    # print(text, text_embeddings, np.linalg.norm(text_embeddings, axis=-1), text_embeddings.shape)
+text_inference = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
+text_inference.model = text_inference.model.to(device)
+
+text = texts
+
+txt_output = text_inference.get_embeddings_from_prompt(texts, normalize=True)
+
+txt_output = txt_output.cpu()
+
+ref_db = lancedb.connect(REF_URI)
+ref = ref_db.open_table("complete_embeddings_MIMIC-CXR-JPG")
+# Filter rows and select only the two columns
+ref_df = ref.search() \
+        .where("split = 'test' AND ignore = 0") \
+        .select(["dicom_id", "path"]) \
+        .to_pandas()
+
+dicom_ids = ref_df["dicom_id"].tolist()
+paths = ref_df["path"].tolist()
+paths = [f"{DATA_DIR}{path}" for path in paths]
+print(f"Loaded {len(paths)} image paths")
 
 
-print("Connecting to LanceDB...")
+clean_label_cols = [col.replace(' ', '_') for col in DISEASES]
+schema = pa.schema([
+    pa.field("path", pa.string()),
+    pa.field("dicom_id", pa.string()),
+    # CHANGED: int8() to float32() to store continuous scores
+    pa.field("prediction", pa.struct([pa.field(col, pa.float32()) for col in clean_label_cols])), 
+])
+
 db = lancedb.connect(URI)
-table = db.create_table(TABLE_NAME, schema=SCHEMA, mode="overwrite")
+table_name = "BioViL-T"
+table = db.create_table(table_name, schema=schema, mode="overwrite")
 
-i = 0
-records = []
-for disease in DISEASES:
-    post_embedding = output_embeddings[i]
-    i += 1
-    neg_embedding = output_embeddings[i]
-    i += 1
+image_inference = get_image_inference(ImageModelType.BIOVIL_T)
+image_inference.model = image_inference.model.to(device) 
+
+print(f"Performing image inference on {len(paths)} images.")
+img_output = []
+for path in tqdm(paths, desc="Extracting embeddings"):
+    image = Path(path)
+    emb = image_inference.get_projected_global_embedding(image)
+    img_output.append(emb.cpu())
+
+batch_record = []
+
+
+for i, img_emb in enumerate(img_output):
+    similarities = img_emb @ txt_output.t()
+    paired_logits = similarities.reshape(len(DISEASES), 2)
+    probs = paired_logits.softmax(dim=-1).detach().numpy()
+
+    pred = {}
+    for u, disease in enumerate(clean_label_cols):
+        pos_score, neg_score = probs[u]
+        
+        # Save the continuous probability of the positive phrase directly
+        pred[f"{disease}"] = float(pos_score)
+
     record = {
-        "disease": disease,
-        "positive_embedding": post_embedding,
-        "negative_embedding": neg_embedding,
+        "path": paths[i],
+        "dicom_id": dicom_ids[i],
+        "prediction": pred
     }
-    records.append(record)
 
-print(f"Adding {len(records)} records to the table...")
-table.add(records)
+    batch_record.append(record)
+    record = {}
+
+table.add(batch_record)

@@ -1,8 +1,9 @@
-from transformers import AutoProcessor, AutoModelForZeroShotImageClassification
+from transformers import AutoTokenizer, AutoModelForZeroShotImageClassification
 import torch
 import numpy as np
 import lancedb
 import pyarrow as pa
+import torch.nn.functional as F
 
 DISEASES = [
     "Atelectasis",
@@ -29,23 +30,36 @@ SCHEMA = pa.schema([
 # this should be like each row is a disease, and the columns are the embeddings for the positive and negative phrases from each model
 
 text_model = AutoModelForZeroShotImageClassification.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli", device_map="auto")
-processor = AutoProcessor.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli")
+tokenizer = AutoTokenizer.from_pretrained("StanfordAIMI/XraySigLIP__vit-l-16-siglip-384__webli")
 
 texts = []
 for disease in DISEASES:
     disease = disease.lower()
-    pos_phrase = f"{disease} is present"
-    neg_phrase = f"no {disease}"
+    # Distinct positive phrase
+    pos_phrase = f"radiographic findings consistent with {disease}"
+    
+    # Universal negative phrase (NO lexical overlap with the disease)
+    neg_phrase = "normal chest x-ray, clear lungs, no abnormalities"
+    
     texts.append(pos_phrase)
     texts.append(neg_phrase)
 print("Number of phrases:", len(texts))
 
-inputs = processor(text=texts, padding="max_length", return_tensors="pt")
+inputs = tokenizer(text=texts, padding="max_length", return_tensors="pt")
 
 with torch.no_grad():
     outputs = text_model.get_text_features(**inputs)
 
-output_embeddings = outputs["pooler_output"] / outputs["pooler_output"].norm(p=2, dim=-1, keepdim=True)
+
+if "pooler_output" in outputs:
+    text_embeddings_tensor = outputs["pooler_output"]
+elif "text_embeds" in outputs:
+    text_embeddings_tensor = outputs["text_embeds"]
+else:
+    # Fallback if it returned a raw tensor directly
+    text_embeddings_tensor = outputs
+
+output_embeddings = text_embeddings_tensor
 
 print("Connecting to LanceDB...")
 db = lancedb.connect(URI)
@@ -54,13 +68,14 @@ table = db.create_table(TABLE_NAME, schema=SCHEMA, mode="overwrite")
 i = 0
 records = []
 for disease in DISEASES:
-    post_embedding = output_embeddings[i].cpu()
+    # 3. CHANGED: Fixed typo 'post_embedding' (was 'post_embedding' vs text variable names)
+    pos_embedding = output_embeddings[i].cpu()
     i += 1
     neg_embedding = output_embeddings[i].cpu()
     i += 1
     record = {
         "disease": disease,
-        "positive_embedding": post_embedding.numpy(),
+        "positive_embedding": pos_embedding.numpy(),
         "negative_embedding": neg_embedding.numpy(),
     }
     records.append(record)

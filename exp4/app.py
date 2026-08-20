@@ -1,133 +1,104 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import scipy.stats as stats
 import plotly.express as px
 import plotly.graph_objects as go
 
-# --- Page Configuration ---
 st.set_page_config(page_title="CXR Retrieval Evaluation", layout="wide")
 st.title("CXR Image-Report Retrieval Dashboard")
 
-# --- Data Loading ---
 @st.cache_data
 def load_data():
-    df = pd.read_csv("evaluation_results_stratified.csv")
-    return df
+    return pd.read_csv("evaluation_results_stratified.csv")
 
 try:
     df = load_data()
 except FileNotFoundError:
-    st.error("Could not find `evaluation_results_stratified.csv`. Make sure you've run the evaluation script.")
+    st.error("Could not find evaluation_results_stratified.csv.")
     st.stop()
 
-# --- Sidebar Controls ---
-st.sidebar.header("Navigation")
-view_mode = st.sidebar.radio("Select View", ["Overall Performance", "Disease Explorer"])
+# --- Statistical Null Calculator ---
+def compute_null_baseline(N_queries, M_candidates, p_val=0.05):
+    """Calculates random guessing baseline and 95% null confidence threshold."""
+    if N_queries <= 0 or M_candidates <= 0:
+        return {}
+    
+    r1_exp = min(1.0 / M_candidates, 1.0)
+    r5_exp = min(5.0 / M_candidates, 1.0)
+    r10_exp = min(10.0 / M_candidates, 1.0)
 
+    # 95th percentile null cutoff via Binomial distribution
+    r1_95 = stats.binom.ppf(1 - p_val, N_queries, r1_exp) / N_queries
+    r5_95 = stats.binom.ppf(1 - p_val, N_queries, r5_exp) / N_queries
+    r10_95 = stats.binom.ppf(1 - p_val, N_queries, r10_exp) / N_queries
+
+    # Harmonic mean approximation for MRR
+    harmonic_M = np.sum(1.0 / np.arange(1, M_candidates + 1))
+    mrr_exp = harmonic_M / M_candidates
+    harmonic2_M = np.sum(1.0 / (np.arange(1, M_candidates + 1) ** 2))
+    var_rr = (harmonic2_M / M_candidates) - (mrr_exp ** 2)
+    std_mrr = np.sqrt(max(var_rr, 1e-9) / N_queries)
+    mrr_95 = mrr_exp + stats.norm.ppf(1 - p_val) * std_mrr
+
+    return {
+        "R@1": (r1_exp, r1_95), "R@5": (r5_exp, r5_95),
+        "R@10": (r10_exp, r10_95), "MRR": (mrr_exp, mrr_95)
+    }
+
+# --- Sidebar Controls ---
 st.sidebar.header("Global Filters")
 selected_task = st.sidebar.radio("Retrieval Task", ["Image-to-Report (I2R)", "Report-to-Image (R2I)"])
 task_prefix = "I2R" if selected_task == "Image-to-Report (I2R)" else "R2I"
 
 selected_section = st.sidebar.selectbox(
-    "Report Section", 
-    options=["softmax", "findings", "impression"],
-    format_func=lambda x: x.capitalize()
+    "Report Strategy", 
+    options=["centroid_1to1", "softmax", "findings", "impression"],
+    format_func=lambda x: "1:1 Geometric Centroid" if x == "centroid_1to1" else x.capitalize()
 )
 
-# --- Overall Performance View ---
-if view_mode == "Overall Performance":
-    st.header(f"Overall {selected_task} Performance ({selected_section.capitalize()})")
-    
-    # Filter for Overall metrics
-    df_overall = df[(df["Disease"] == "Overall") & (df["Section"] == selected_section)]
-    
-    if df_overall.empty:
-        st.warning("No overall data found for these filters.")
-    else:
-        # Prepare data for plotting
-        metrics = ["R@1", "R@5", "R@10", "MRR"]
-        plot_data = []
-        for metric in metrics:
-            col_name = f"{task_prefix}_{metric}"
-            for _, row in df_overall.iterrows():
-                plot_data.append({
-                    "Model": row["Model"],
-                    "Metric": metric,
-                    "Score": row[col_name]
-                })
-        
-        df_plot = pd.DataFrame(plot_data)
-        
-        # Plot Grouped Bar Chart
-        fig = px.bar(
-            df_plot, 
-            x="Metric", 
-            y="Score", 
-            color="Model", 
-            barmode="group",
-            text_auto='.3f',
-            title=f"Overall Metrics Comparison",
-            color_discrete_sequence=px.colors.qualitative.Prism
-        )
-        fig.update_layout(yaxis_title="Score", yaxis_range=[0, 1])
-        st.plotly_chart(fig, use_container_width=True)
+st.header(f"Performance ({selected_section}) vs. Null Baseline")
 
-        # Show raw data
-        st.subheader("Raw Results")
-        st.dataframe(df_overall[["Model", f"{task_prefix}_R@1", f"{task_prefix}_R@5", f"{task_prefix}_R@10", f"{task_prefix}_MRR", f"Query_Count_{task_prefix}"]], use_container_width=True)
+df_filtered = df[(df["Disease"] == "Overall") & (df["Section"] == selected_section)]
 
-# --- Disease Explorer View ---
-elif view_mode == "Disease Explorer":
-    st.header("Disease Stratification Explorer")
+if not df_filtered.empty:
+    N_q = int(df_filtered["Query_Count_I2R"].iloc[0])
+    M_pool = int(df_filtered["Candidate_Pool_Size"].iloc[0]) if "Candidate_Pool_Size" in df_filtered.columns else 3269
     
-    col1, col2 = st.columns(2)
-    with col1:
-        selected_metric = st.selectbox("Select Metric to Visualize", ["R@1", "R@5", "R@10", "MRR"], index=2)
-    with col2:
-        label_mapping = {
-            1: "1 (Positive)", 
-            0: "0 (Negative)", 
-            -1: "-1 (Uncertain)", 
-            -2: "-2 (No Mention)"
-        }
-        selected_label_val = st.selectbox("CheXpert Label", options=[1, 0, -1, -2], format_func=lambda x: label_mapping[x])
+    null_bounds = compute_null_baseline(N_q, M_pool)
     
-    # Filter for specific disease labels (exclude "Overall")
-    df_disease = df[
-        (df["Disease"] != "Overall") & 
-        (df["Section"] == selected_section) & 
-        (df["Label"] == str(selected_label_val))  # Ensure string matching if CSV saved as string
-    ]
-    
-    # Sometimes Pandas reads it as int, sometimes string, let's cast to be safe
-    df["Label"] = df["Label"].astype(str)
-    df_disease = df[
-        (df["Disease"] != "Overall") & 
-        (df["Section"] == selected_section) & 
-        (df["Label"] == str(selected_label_val))
-    ]
-    
-    metric_col = f"{task_prefix}_{selected_metric}"
-    
-    if df_disease.empty:
-        st.warning("No data found for this combination.")
-    else:
-        # Create a pivot table for the Heatmap: Diseases (Rows) x Models (Columns)
-        pivot_df = df_disease.pivot(index="Disease", columns="Model", values=metric_col)
-        
-        # Plot Heatmap
-        fig = px.imshow(
-            pivot_df, 
-            text_auto=".3f", 
-            aspect="auto",
-            color_continuous_scale="Viridis",
-            title=f"{selected_metric} for {task_prefix} across Diseases (Label: {label_mapping[selected_label_val]})"
+    # Statistical Callout Banner
+    st.info(
+        f"**Null Baseline (Random Chance) for N={N_q} queries, M={M_pool} pool:**\n"
+        f"- **R@1:** Expected = `{null_bounds['R@1'][0]:.4f}` | 95% Cutoff (p=0.05) = `{null_bounds['R@1'][1]:.4f}`\n"
+        f"- **R@5:** Expected = `{null_bounds['R@5'][0]:.4f}` | 95% Cutoff (p=0.05) = `{null_bounds['R@5'][1]:.4f}`\n"
+        f"- **MRR:** Expected = `{null_bounds['MRR'][0]:.4f}` | 95% Cutoff (p=0.05) = `{null_bounds['MRR'][1]:.4f}`"
+    )
+
+    metrics = ["R@1", "R@5", "R@10", "MRR"]
+    plot_data = []
+    for metric in metrics:
+        for _, row in df_filtered.iterrows():
+            plot_data.append({
+                "Model": row["Model"],
+                "Metric": metric,
+                "Score": row[f"{task_prefix}_{metric}"],
+                "Null_95": null_bounds[metric][1]
+            })
+
+    df_plot = pd.DataFrame(plot_data)
+
+    fig = px.bar(
+        df_plot, x="Metric", y="Score", color="Model", barmode="group",
+        text_auto='.3f', title="Model Metrics vs. Statistical Null Range (Red Lines)",
+        color_discrete_sequence=px.colors.qualitative.Prism
+    )
+
+    # Add red line indicators for the p=0.05 null threshold
+    for m in metrics:
+        fig.add_shape(
+            type="line", x0=m, x1=m, y0=0, y1=null_bounds[m][1],
+            line=dict(color="Red", width=3, dash="dash")
         )
-        fig.update_layout(xaxis_title="Model", yaxis_title="Disease")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Support/Query Count check (to see if a high score is just due to N=1)
-        st.subheader("Query Counts (N)")
-        st.caption("Always check query counts. High retrieval scores on very low sample sizes can be misleading.")
-        count_col = f"Query_Count_{task_prefix}"
-        count_pivot = df_disease.pivot(index="Disease", columns="Model", values=count_col)
-        st.dataframe(count_pivot, use_container_width=True)
+
+    st.plotly_chart(fig, use_container_width=True)
