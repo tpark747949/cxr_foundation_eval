@@ -12,15 +12,16 @@ import lancedb
 # 1. Connect to LanceDB
 print("Connecting to LanceDB...")
 db = lancedb.connect("../embeddings/MIMIC-CXR-JPG")
-table = db.open_table("complete_embeddings_MIMIC-CXR-JPG")
+table = db.open_table("fixed_embeddings_MIMIC-CXR-JPG")
 df = table.to_pandas()
 print(f"Loaded {len(df)} records.")
 
 # 2. Define the exact order as stored in your PyArrow struct
 pathologies = [
-    "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Enlarged Cardiomediastinum",
-    "Fracture", "Lung Lesion", "Lung Opacity", "Pleural Effusion", "Pneumonia",
-    "Pneumothorax", "Pleural Other", "Support Devices", "No Finding"
+    "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", 
+    "Enlarged_Cardiomediastinum", "Fracture", "Lung_Lesion", 
+    "Lung_Opacity", "Pleural_Effusion", "Pneumonia", 
+    "Pneumothorax", "Pleural_Other", "Support_Devices", "No_Finding"
 ]
 
 # 3. Unpack the PyArrow Struct

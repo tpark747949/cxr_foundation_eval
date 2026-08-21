@@ -7,15 +7,15 @@ import lancedb
 
 # 1. Connect to LanceDB and load data
 db = lancedb.connect("../embeddings/MIMIC-CXR-JPG")
-table = db.open_table("complete_embeddings_MIMIC-CXR-JPG")
+table = db.open_table("fixed_embeddings_MIMIC-CXR-JPG")
 df = table.to_pandas()
 print(df.columns.tolist())
 
 pathologies = [
     "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", 
-    "Enlarged Cardiomediastinum", "Fracture", "Lung Lesion", 
-    "Lung Opacity", "Pleural Effusion", "Pneumonia", 
-    "Pneumothorax", "Pleural Other", "Support Devices", "No Finding"
+    "Enlarged_Cardiomediastinum", "Fracture", "Lung_Lesion", 
+    "Lung_Opacity", "Pleural_Effusion", "Pneumonia", 
+    "Pneumothorax", "Pleural_Other", "Support_Devices", "No_Finding"
 ]
 
 # Expand the CheXpert_labels list column into 14 distinct columns

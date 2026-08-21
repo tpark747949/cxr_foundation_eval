@@ -17,7 +17,7 @@ DISEASES = [
     "Pneumonia", "Pneumothorax", "Support Devices", "No Finding"
 ]
 
-MODELS = ["MedSigLIP", "CXR_Foundation", "BioViL-T", "CheXagent"]
+MODELS = ["MedSigLIP", "CXR_Foundation", "BioViL-T"]
 
 def compute_similarity(img_emb: np.ndarray, txt_emb: np.ndarray) -> float:
     """Computes cosine similarity."""

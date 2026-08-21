@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import os
 
-MODELS = ["MedSigLIP", "CXR_Foundation", "BioViL-T", "CheXagent"]
+MODELS = ["MedSigLIP", "CXR_Foundation", "BioViL-T"]
 DISEASES = [
     "Atelectasis", "Cardiomegaly", "Consolidation", "Edema", 
     "Enlarged Cardiomediastinum", "Fracture", "Lung Lesion", 
