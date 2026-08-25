@@ -20,7 +20,3 @@ __pycache__/
 *.npy
 *.json
 
-# Embeddings
-*.lance
-*.txn
-*.manifest
