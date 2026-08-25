@@ -1,0 +1,11 @@
+[project]
+name = "embeddings"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.4",
+    "lancedb>=0.34.0",
+    "pylance>=8.0.0",
+]

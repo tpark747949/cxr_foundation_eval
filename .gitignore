@@ -21,4 +21,6 @@ __pycache__/
 *.json
 
 # Embeddings
-embeddings/*
+*.lance
+*.txn
+*.manifest
