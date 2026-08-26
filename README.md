@@ -32,7 +32,7 @@ These documents provide the project direction, presentation summary, and full wr
 
 | Material | Description |
 | --- | --- |
-| [Research plan](docs/mimic_cxr_foundation_models_research_plan.html) | Original study motivation, aims, candidate models, dataset, and proposed experimental design |
+| [Research plan](docs/research%20plan.md) | Original study motivation, aims, candidate models, dataset, and proposed experimental design |
 | [Projection presentation](docs/08.21_final.pdf) | Slide deck covering the question, methods, experiments, and primary outcomes |
 | [Project report](docs/Project%20report.pdf) | Written report describing the completed evaluation, results, discussion, and future directions |
 

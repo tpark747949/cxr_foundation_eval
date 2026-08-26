@@ -1,30 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Research Plan: Foundation Models for MIMIC-CXR-JPG</title>
-  <style>
-    body { font-family: Arial, Helvetica, sans-serif; line-height: 1.6; margin: 40px; color: #222; max-width: 1100px; }
-    h1, h2, h3 { color: #14395b; }
-    h1 { border-bottom: 3px solid #14395b; padding-bottom: 10px; }
-    h2 { margin-top: 34px; border-bottom: 1px solid #ccc; padding-bottom: 6px; }
-    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
-    th, td { border: 1px solid #ccc; padding: 10px; vertical-align: top; }
-    th { background: #eef4fa; }
-    code { background: #f4f4f4; padding: 2px 5px; border-radius: 4px; }
-    .box { background: #f7fbff; border-left: 5px solid #2b6da8; padding: 14px 18px; margin: 18px 0; }
-    .warning { background: #fff8e6; border-left: 5px solid #d49400; padding: 14px 18px; margin: 18px 0; }
-    .small { font-size: 0.93em; color: #555; }
-    a { color: #0b5cad; }
-    .tabs { position: sticky; top: 0; background: #ffffff; padding: 10px 0 12px; border-bottom: 1px solid #d9e2ec; margin-bottom: 24px; z-index: 10; }
-    .tabs a { display: inline-block; margin: 4px 6px 4px 0; padding: 8px 12px; background: #eef4fa; color: #14395b; text-decoration: none; border: 1px solid #c7d7e6; border-radius: 6px; font-weight: 600; font-size: 0.94em; }
-    .tabs a:hover { background: #dcecf8; }
-    html { scroll-behavior: smooth; }
-  </style>
-</head>
-<body>
-
 <h1>Research Plan: Evaluating Chest X-ray Foundation Models on MIMIC-CXR-JPG</h1>
 <nav class="tabs" aria-label="Section navigation">
   <a href="#background">1. Background</a>
@@ -330,6 +303,3 @@
 </table>
 
 <p class="small">Prepared as a research plan focused on core motivation, dataset, model candidates, key papers, and concrete experimental design.</p>
-
-</body>
-</html>
