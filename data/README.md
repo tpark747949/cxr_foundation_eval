@@ -26,6 +26,10 @@ data/
 │       ├── files/              # JPEG images organized by subject_id/study_id
 │       ├── mimic-cxr-*.csv.gz  # Metadata splits (train/validate/test)
 │       └── mimic-cxr-chexpert-labels.csv.gz  # CheXpert-style pathology labels
+├── MIMIC-CXR/
+│   ├── p10/
+│   └── p12/
+│       └── ...
 ├── sample_images/              # Subset of sample images for quick testing
 │
 ├── Python Scripts (Utilities & Analysis)
