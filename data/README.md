@@ -1,4 +1,4 @@
-# MIMIC-CXR Data Folder
+# Data Folder
 
 This folder contains scripts, utilities, and configuration for processing, analyzing, and quality-checking the **MIMIC-CXR-JPG** dataset (v2.1.0), a large-scale collection of chest X-ray images from the Medical Information Mart for Intensive Care (MIMIC) database. The folder integrates with the embeddings pipeline to compute and analyze foundation model representations of CXR images.
 
@@ -454,10 +454,22 @@ python split_analysis.py
 python matrix_analyses.py
 ```
 
+## MIMIC-CXR
+
+MIMIC-CXR is the parent proejct of MIMIC-CXR-JPG and contains the original text reports corresponding to the radiology studies. For the purposes of our experiment, just the text files are downloaded from the Web source (~300 MB), and symlinked to './MIMIC-CXR', such that
+
+```bash
+data/MIMIC-CXR
+├── p10
+├── p11
+├── p12
+...
+```
+
 ## Notes & Considerations
 
-- **Data Privacy:** MIMIC-CXR requires credentialed access; ensure compliance with data use agreements
-- **Disk Space:** Full dataset ~150 GB; consider using `SAMPLE_LIMIT` in `profile_mimic.py` for testing
+- **Data Privacy:** MIMIC-CXR-JPG requires credentialed access; ensure compliance with data use agreements. Visit PhysioNet to create an account for official [MIMIC-CXR-JPG](https://www.physionet.org/content/mimic-cxr-jpg/2.1.0/) and [MIMIC-CXR](https://www.physionet.org/content/mimic-cxr/2.1.0/) download protocol.
+- **Disk Space:** Full dataset ~570 GB; consider using `SAMPLE_LIMIT` in `profile_mimic.py` for testing. Google Cloud download highly recommended.
 - **GPU Acceleration:** `cosine_similarity.py` uses GPU if available (CUDA); falls back to CPU
 - **Performance:** LanceDB query scans are optimized for large-scale analysis but memory usage scales with table size
 - **Metadata Caching:** Streamlit app uses `@st.cache_resource` and `@st.cache_data` for performance; clear cache if data changes
@@ -465,7 +477,4 @@ python matrix_analyses.py
 ## Future Enhancements
 
 - [ ] Automated data validation pipeline
-- [ ] Integration with model-agnostic interpretability tools
-- [ ] Multi-modal contrastive analysis (image-report-label triples)
-- [ ] Federated learning pipeline for decentralized model training
 - [ ] Real-time streaming QC for production deployments
