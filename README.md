@@ -1,10 +1,5 @@
-<table align="center">
-  <tr>
-    <td width="33%" align="center"><img src="docs/carleton.png" alt="Carleton University" height="86" style="max-width: none;"></td>
-    <td width="33%" align="center"><img src="docs/hms.png" alt="Harvard Medical School" height="86" style="max-width: none;"></td>
-    <td width="33%" align="center"><img src="docs/mgh.png" alt="Massachusetts General Hospital" height="86" style="max-width: none;"></td>
-  </tr>
-</table>
+<p align="center"><img src="docs/carleton.png" alt="Carleton College" height="86">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/hms.png" alt="Harvard Medical School" height="86">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/mgh.png" alt="Massachusetts General Hospital" height="86"></p>
+
 
 
 
