@@ -1,9 +1,4 @@
-<p align="center"><img src="docs/carleton.png" alt="Carleton College" height="86">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/hms.png" alt="Harvard Medical School" height="86">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/mgh.png" alt="Massachusetts General Hospital" height="86"></p>
-
-
-
-
-
+<p align="center"><img src="docs/carleton.png" alt="Carleton College" height="40">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/hms.png" alt="Harvard Medical School" height="40">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img src="docs/mgh.png" alt="Massachusetts General Hospital" height="40"></p>
 
 <h1 align="center">Evaluating Chest X-ray Foundation Models</h1>
 
